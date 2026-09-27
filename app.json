@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Hardware IMS",
+    "slug": "hardware-ims",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "mmh",
+    "platforms": ["ios", "android", "web"],
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hardware.ims"
+    },
+    "android": {
+      "package": "com.hardware.ims",
+      "adaptiveIcon": {
+        "backgroundColor": "#1e3a5f"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
