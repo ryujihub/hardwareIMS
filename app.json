@@ -7,7 +7,19 @@
     "userInterfaceStyle": "light",
     "scheme": "mmh",
     "platforms": ["ios", "android", "web"],
+    "icon": "./assets/icon.png",
     "assetBundlePatterns": ["**/*"],
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#1e3a5f"
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hardware.ims"
@@ -15,6 +27,7 @@
     "android": {
       "package": "com.hardware.ims",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1e3a5f"
       }
     },
