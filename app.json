@@ -6,9 +6,15 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "mmh",
-    "platforms": ["ios", "android", "web"],
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "icon": "./assets/icon.png",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "plugins": [
       [
         "expo-splash-screen",
@@ -34,6 +40,12 @@
     "web": {
       "bundler": "metro",
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a935af6c-6638-4a61-80c8-ffcbd5afa4f3"
+      }
+    },
+    "owner": "andreyryuji09"
   }
 }
