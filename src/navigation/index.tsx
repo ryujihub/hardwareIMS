@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/services/auth';
-import { colors, spacing } from '@/theme';
+import { useStyles } from '@/services/settings';
+import { colors, spacing, createStyleSheet } from '@/theme';
 import { HomeScreen } from '@/screens/staff/HomeScreen';
 import { NewOrderScreen } from '@/screens/staff/NewOrderScreen';
 import { StockScreen } from '@/screens/staff/StockScreen';
@@ -22,6 +23,7 @@ export type TabKey = (typeof TABS)[number]['key'];
 
 export function MainTabs() {
   const { profile } = useAuth();
+  const styles = useStyles(makeStyles);
   const isStaff = profile?.role === 'staff';
 
   // Staff: Home (check-in/out), New Order, Stock only. Manager/admin: everything.
@@ -54,15 +56,7 @@ export function MainTabs() {
         {tab === 'admin' && <AdminScreen />}
       </View>
 
-      <View
-        style={{
-          flexDirection: 'row',
-          backgroundColor: colors.white,
-          borderTopWidth: 1,
-          borderTopColor: colors.border,
-          paddingBottom: spacing(2),
-        }}
-      >
+      <View style={styles.tabBar}>
         {visibleTabs.map((t) => {
           const focused = tab === t.key;
           return (
@@ -88,4 +82,16 @@ export function MainTabs() {
       </View>
     </View>
   );
+}
+
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+    tabBar: {
+      flexDirection: 'row',
+      backgroundColor: c.card,
+      borderTopWidth: 1,
+      borderTopColor: c.border,
+      paddingBottom: spacing(2),
+    },
+  });
 }

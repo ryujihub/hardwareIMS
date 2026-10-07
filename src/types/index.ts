@@ -17,6 +17,7 @@ export interface Product {
   price: number;
   stock: number;
   reorder_point: number;
+  image_url?: string | null;
 }
 
 export interface Customer {
@@ -31,6 +32,7 @@ export interface CartItem {
   name: string;
   price: number;
   quantity: number;
+  image_url?: string | null;
 }
 
 export type PaymentMethod = 'cash' | 'card' | 'gcash';
@@ -62,9 +64,36 @@ export interface OrderItem {
   quantity: number;
 }
 
+// Admin-customizable app configuration (settings table row 1).
+// Defaults match a fresh schema.sql install; the app works even when
+// the customization migration hasn't run (missing fields fall back here).
 export interface Settings {
   delivery_fee: number;
+  store_name: string;
+  tagline: string;
+  currency_symbol: string;
+  receipt_footer: string;
+  primary_color: string;
+  accent_color: string;
+  dark_mode: boolean;
+  payment_methods: PaymentMethod[];
+  low_stock_threshold: number;
+  categories: string[];
 }
+
+export const DEFAULT_SETTINGS: Settings = {
+  delivery_fee: 50,
+  store_name: 'Metro Manila Hills',
+  tagline: 'Construction Supply & Trading — Inventory System',
+  currency_symbol: '₱',
+  receipt_footer: 'Salamat po! 🙏',
+  primary_color: '#1e3a5f',
+  accent_color: '#f59e0b',
+  dark_mode: false,
+  payment_methods: ['cash', 'card', 'gcash'],
+  low_stock_threshold: 5,
+  categories: [],
+};
 
 // An order captured while offline, waiting to sync
 export interface QueuedOrder {

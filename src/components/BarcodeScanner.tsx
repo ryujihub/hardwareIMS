@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useStyles } from '@/services/settings';
 import { colors, spacing } from '@/theme';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 // Camera scanner with manual barcode entry fallback (web cameras often
 // can't scan, so staff can always key the digits instead).
 export function BarcodeScanner({ visible, onScanned, onClose }: Props) {
+  const styles = useStyles(makeStyles);
   const [permission, requestPermission] = useCameraPermissions();
   const [manual, setManual] = useState('');
   const [locked, setLocked] = useState<string | null>(null);
@@ -85,7 +87,8 @@ export function BarcodeScanner({ visible, onScanned, onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles() {
+  return StyleSheet.create({
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: spacing(6), zIndex: 100 },
   sheet: { backgroundColor: colors.card, borderRadius: 16, padding: spacing(4) },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing(3) },
@@ -96,7 +99,8 @@ const styles = StyleSheet.create({
   hint: { fontSize: 13, color: colors.textMuted, textAlign: 'center', padding: spacing(2) },
   centerBlock: { marginBottom: spacing(3) },
   manualRow: { flexDirection: 'row', gap: spacing(2) },
-  manualInput: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), fontSize: 15, backgroundColor: colors.bg },
+  manualInput: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), fontSize: 15, backgroundColor: colors.bg, color: colors.text },
   primaryBtn: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: spacing(4), justifyContent: 'center' },
-  primaryText: { color: colors.white, fontWeight: '700' },
-});
+  primaryText: { color: colors.onPrimary, fontWeight: '700' },
+  });
+}

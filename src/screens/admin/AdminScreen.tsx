@@ -1,26 +1,30 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Dimensions, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Dimensions, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { supabase, ephemeralClient } from '@/services/supabase';
 import { useAuth } from '@/services/auth';
 import {
   fetchProducts,
+  fetchProfiles,
   fetchRecentOrders,
-  fetchSettings,
   setOrderStatus,
-  updateDeliveryFee,
   updatePayment,
 } from '@/services/db';
+import { useSettings, useStyles } from '@/services/settings';
 import { fetchDailySales, exportSalesPdf, exportSalesCsv, type DailySalesRow } from '@/services/reports';
 import { getQueue } from '@/store/cache';
 import { peso, isSameLocalDay } from '@/utils/format';
-import { colors, spacing } from '@/theme';
-import type { Order, OrderStatus, PaymentStatus, Product, Profile } from '@/types';
+import { isLowStock } from '@/utils/stock';
+import { colors, spacing, createStyleSheet } from '@/theme';
+import type { Order, OrderStatus, PaymentMethod, PaymentStatus, Product, Profile, Settings } from '@/types';
 
-const STATUS_OPTIONS: { key: OrderStatus; label: string; color: string }[] = [
-  { key: 'completed', label: 'Completed', color: colors.success },
-  { key: 'pending', label: 'Pending', color: colors.warning },
-  { key: 'cancelled', label: 'Cancelled', color: colors.danger },
-];
+// Colors are read at call time so status chips follow the live theme
+function statusOptions(): { key: OrderStatus; label: string; color: string }[] {
+  return [
+    { key: 'completed', label: 'Completed', color: colors.success },
+    { key: 'pending', label: 'Pending', color: colors.warning },
+    { key: 'cancelled', label: 'Cancelled', color: colors.danger },
+  ];
+}
 
 const PAYMENT_OPTIONS: { key: PaymentStatus; label: string }[] = [
   { key: 'paid', label: 'Paid' },
@@ -30,6 +34,8 @@ const PAYMENT_OPTIONS: { key: PaymentStatus; label: string }[] = [
 
 export function AdminScreen() {
   const { profile } = useAuth();
+  const { settings } = useSettings();
+  const styles = useStyles(makeStyles);
   const isWide = Dimensions.get('window').width >= 768;
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -45,7 +51,7 @@ export function AdminScreen() {
     setOffline(p.offline);
     setOrders(o.data);
     setSales(s);
-    setStaff(await fetchProfilesSafe());
+    setStaff(await fetchProfiles());
     const queue = await getQueue();
     setPendingCount(queue.length);
   }, []);
@@ -65,7 +71,7 @@ export function AdminScreen() {
     .filter((o) => o.status !== 'cancelled')
     .reduce((s, o) => s + Math.max(Number(o.total) - Number(o.amount_paid ?? 0), 0), 0);
   const inventoryValue = products.reduce((s, p) => s + Number(p.price) * p.stock, 0);
-  const lowStock = products.filter((p) => p.stock <= p.reorder_point);
+  const lowStock = products.filter((p) => isLowStock(p, settings.low_stock_threshold));
 
   const staffLeaderboard = useMemo(() => {
     const map = new Map<string, { name: string; orders: number; sales: number }>();
@@ -149,7 +155,7 @@ export function AdminScreen() {
           ))}
 
           <Text style={styles.section}>⚙️ Settings</Text>
-          <SettingsCard onSaved={load} />
+          <SettingsPanel />
 
           <Text style={styles.section}>👥 Roles</Text>
           <RolesCard />
@@ -159,16 +165,12 @@ export function AdminScreen() {
   );
 }
 
-async function fetchProfilesSafe(): Promise<Profile[]> {
-  const { data, error } = await supabase.from('profiles').select('*');
-  return error || !data ? [] : (data as Profile[]);
-}
-
 // ---- Order row with status + payment editing ----
 function OrderRow({ order, staffName, onChanged }: { order: Order; staffName: string; onChanged: () => void }) {
+  const styles = useStyles(makeStyles);
   const [expanded, setExpanded] = useState(false);
   const [amountPaid, setAmountPaid] = useState(String(order.amount_paid ?? 0));
-  const statusMeta = STATUS_OPTIONS.find((s) => s.key === order.status);
+  const statusMeta = statusOptions().find((s) => s.key === order.status);
   const paymentStatus: PaymentStatus = order.payment_status ?? 'unpaid';
 
   async function changeStatus(status: OrderStatus) {
@@ -210,7 +212,7 @@ function OrderRow({ order, staffName, onChanged }: { order: Order; staffName: st
         <View style={styles.expandBox}>
           <Text style={styles.label}>Status</Text>
           <View style={styles.btnRow}>
-            {STATUS_OPTIONS.map((s) => (
+            {statusOptions().map((s) => (
               <Pressable
                 key={s.key}
                 style={[styles.chip, order.status === s.key && styles.chipActive]}
@@ -242,6 +244,8 @@ function OrderRow({ order, staffName, onChanged }: { order: Order; staffName: st
 
 // ---- Daily sales summary with exports ----
 function DailySalesCard({ sales }: { sales: DailySalesRow[] }) {
+  const styles = useStyles(makeStyles);
+
   function exportPdf() {
     if (sales.length === 0) return Alert.alert('No data', 'No sales recorded yet.');
     void exportSalesPdf(sales, 'Daily Sales Report');
@@ -273,39 +277,216 @@ function DailySalesCard({ sales }: { sales: DailySalesRow[] }) {
   );
 }
 
-// ---- Settings ----
-function SettingsCard({ onSaved }: { onSaved: () => void }) {
-  const [fee, setFee] = useState('');
+// ---- Settings: branding, appearance, ordering rules, categories ----
+const PRIMARY_PRESETS = ['#1e3a5f', '#0f766e', '#7c3aed', '#be123c', '#15803d', '#1d4ed8', '#b45309', '#334155'];
+const ACCENT_PRESETS = ['#f59e0b', '#22c55e', '#06b6d4', '#ec4899', '#84cc16', '#f43f5e', '#eab308', '#8b5cf6'];
+const ALL_PAYMENT_METHODS: PaymentMethod[] = ['cash', 'card', 'gcash'];
+
+interface SettingsForm {
+  store_name: string;
+  tagline: string;
+  currency_symbol: string;
+  receipt_footer: string;
+  deliveryFeeText: string;
+  thresholdText: string;
+  primary_color: string;
+  accent_color: string;
+  dark_mode: boolean;
+  payment_methods: PaymentMethod[];
+  categories: string[];
+}
+
+function formFromSettings(s: Settings): SettingsForm {
+  return {
+    store_name: s.store_name,
+    tagline: s.tagline,
+    currency_symbol: s.currency_symbol,
+    receipt_footer: s.receipt_footer,
+    deliveryFeeText: String(s.delivery_fee),
+    thresholdText: String(s.low_stock_threshold),
+    primary_color: s.primary_color,
+    accent_color: s.accent_color,
+    dark_mode: s.dark_mode,
+    payment_methods: [...s.payment_methods],
+    categories: [...s.categories],
+  };
+}
+
+function isValidHex(hex: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(hex.trim());
+}
+
+function SettingsPanel() {
+  const { settings, saveSettings, applyLive } = useSettings();
+  const styles = useStyles(makeStyles);
+  const [form, setForm] = useState<SettingsForm>(() => formFromSettings(settings));
+  const [newCategory, setNewCategory] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    void fetchSettings().then((s) => setFee(String(s.data.delivery_fee)));
-  }, []);
+  // Re-hydrate the form when settings change (after a save or another admin's edit)
+  useEffect(() => setForm(formFromSettings(settings)), [settings]);
 
-  async function save() {
-    setBusy(true);
-    setMsg(null);
-    const feeNum = parseFloat(fee);
-    if (Number.isNaN(feeNum) || feeNum < 0) {
-      setMsg('Enter a valid delivery fee.');
-      setBusy(false);
+  const update = (patch: Partial<SettingsForm>) => setForm((f) => ({ ...f, ...patch }));
+
+  function togglePayment(m: PaymentMethod) {
+    const next = form.payment_methods.includes(m)
+      ? form.payment_methods.filter((x) => x !== m)
+      : [...form.payment_methods, m];
+    if (next.length === 0) {
+      setMsg('Keep at least one payment method enabled.');
       return;
     }
-    const { error } = await updateDeliveryFee(feeNum);
-    setMsg(error ? `Error: ${error}` : 'Delivery fee updated ✓');
+    setMsg(null);
+    update({ payment_methods: next });
+  }
+
+  function addCategory() {
+    const c = newCategory.trim();
+    if (!c) return;
+    if (!form.categories.some((x) => x.toLowerCase() === c.toLowerCase())) {
+      update({ categories: [...form.categories, c] });
+    }
+    setNewCategory('');
+  }
+
+  async function save() {
+    setMsg(null);
+    if (!form.store_name.trim()) return setMsg('Store name cannot be empty.');
+    if (!isValidHex(form.primary_color)) return setMsg('Primary color must be a hex code like #1e3a5f.');
+    if (!isValidHex(form.accent_color)) return setMsg('Accent color must be a hex code like #f59e0b.');
+    const fee = parseFloat(form.deliveryFeeText);
+    const threshold = parseInt(form.thresholdText, 10);
+    if (Number.isNaN(fee) || fee < 0) return setMsg('Enter a valid delivery fee.');
+    if (Number.isNaN(threshold) || threshold < 0) return setMsg('Enter a valid low-stock threshold.');
+
+    setBusy(true);
+    const error = await saveSettings({
+      ...settings,
+      store_name: form.store_name.trim(),
+      tagline: form.tagline,
+      currency_symbol: form.currency_symbol.trim() || '₱',
+      receipt_footer: form.receipt_footer,
+      delivery_fee: fee,
+      low_stock_threshold: threshold,
+      primary_color: form.primary_color.trim(),
+      accent_color: form.accent_color.trim(),
+      dark_mode: form.dark_mode,
+      payment_methods: form.payment_methods,
+      categories: form.categories,
+    });
     setBusy(false);
-    if (!error) onSaved();
+    // Re-sync the form from the source of truth so a failed save (e.g. missing
+    // migration column) reverts any in-flight draft that the DB rejected.
+    setForm(formFromSettings(settings));
+    setMsg(error ? `Error: ${error}` : 'Saved ✓ — branding, theme & rules applied across the app.');
   }
 
   return (
     <View style={styles.card}>
-      <Text style={styles.label}>Default delivery fee (₱)</Text>
-      <TextInput style={styles.input} value={fee} onChangeText={setFee} keyboardType="decimal-pad" />
+      <Text style={styles.panelHeading}>🏷️ Branding</Text>
+      <Text style={styles.label}>Store name</Text>
+      <TextInput style={styles.input} value={form.store_name} onChangeText={(t) => update({ store_name: t })} placeholder="Metro Manila Hills" />
+      <Text style={styles.label}>Tagline (login + receipts)</Text>
+      <TextInput style={styles.input} value={form.tagline} onChangeText={(t) => update({ tagline: t })} placeholder="Construction Supply & Trading" />
+      <Text style={styles.label}>Currency symbol</Text>
+      <TextInput style={styles.input} value={form.currency_symbol} onChangeText={(t) => update({ currency_symbol: t })} maxLength={4} />
+      <Text style={styles.label}>Receipt footer</Text>
+      <TextInput style={styles.input} value={form.receipt_footer} onChangeText={(t) => update({ receipt_footer: t })} placeholder="Salamat po! 🙏" />
+
+      <Text style={styles.panelHeading}>🎨 Appearance</Text>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>Dark mode</Text>
+        <Switch
+          value={form.dark_mode}
+          onValueChange={(v) => {
+            // Live preview so the switch is honest immediately; the Save button
+            // persists. If the save fails the form re-syncs from settings.
+            applyLive(settings.primary_color, settings.accent_color, v);
+            update({ dark_mode: v });
+          }}
+          trackColor={{ true: colors.primary, false: colors.border }}
+          thumbColor={colors.card}
+        />
+      </View>
+      <Text style={styles.label}>Primary color</Text>
+      <View style={styles.swatchRow}>
+        {PRIMARY_PRESETS.map((c) => (
+          <Pressable
+            key={c}
+            style={[styles.swatch, { backgroundColor: c }, form.primary_color.toLowerCase() === c && styles.swatchActive]}
+            onPress={() => update({ primary_color: c })}
+            accessibilityLabel={`Primary color ${c}`}
+          />
+        ))}
+      </View>
+      <TextInput style={styles.input} value={form.primary_color} onChangeText={(t) => update({ primary_color: t })} placeholder="#1e3a5f" autoCapitalize="none" />
+      <Text style={styles.label}>Accent color</Text>
+      <View style={styles.swatchRow}>
+        {ACCENT_PRESETS.map((c) => (
+          <Pressable
+            key={c}
+            style={[styles.swatch, { backgroundColor: c }, form.accent_color.toLowerCase() === c && styles.swatchActive]}
+            onPress={() => update({ accent_color: c })}
+            accessibilityLabel={`Accent color ${c}`}
+          />
+        ))}
+      </View>
+      <TextInput style={styles.input} value={form.accent_color} onChangeText={(t) => update({ accent_color: t })} placeholder="#f59e0b" autoCapitalize="none" />
+
+      <Text style={styles.panelHeading}>🛒 Ordering Rules</Text>
+      <Text style={styles.label}>Default delivery fee ({form.currency_symbol || settings.currency_symbol})</Text>
+      <TextInput style={styles.input} value={form.deliveryFeeText} onChangeText={(t) => update({ deliveryFeeText: t })} keyboardType="decimal-pad" />
+      <Text style={styles.label}>Accepted payment methods</Text>
+      <View style={styles.payChipRow}>
+        {ALL_PAYMENT_METHODS.map((m) => {
+          const on = form.payment_methods.includes(m);
+          return (
+            <Pressable key={m} style={[styles.chip, on && styles.chipActive, styles.roleChip]} onPress={() => togglePayment(m)}>
+              <Text style={[styles.chipText, on && styles.chipTextActive]}>
+                {m === 'cash' ? '💵 Cash' : m === 'card' ? '💳 Card' : '📱 GCash'}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.label}>Low-stock alert threshold</Text>
+      <TextInput style={styles.input} value={form.thresholdText} onChangeText={(t) => update({ thresholdText: t })} keyboardType="number-pad" />
+      <Text style={styles.sectionNote}>Used when a product has no reorder point set.</Text>
+
+      <Text style={styles.panelHeading}>🗂️ Product Categories</Text>
+      {form.categories.length > 0 ? (
+        <View style={styles.catChipsWrap}>
+          {form.categories.map((c) => (
+            <View key={c} style={styles.catChip}>
+              <Text style={styles.catChipText}>{c}</Text>
+              <Pressable hitSlop={8} onPress={() => update({ categories: form.categories.filter((x) => x !== c) })}>
+                <Text style={styles.catRemove}>✕</Text>
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.sectionNote}>No categories yet — add one below. Shown as quick-picks when editing products.</Text>
+      )}
+      <View style={styles.catRow}>
+        <TextInput
+          style={[styles.input, { flex: 1, marginBottom: 0 }]}
+          value={newCategory}
+          onChangeText={setNewCategory}
+          placeholder="e.g. Paint"
+          onSubmitEditing={addCategory}
+        />
+        <Pressable style={styles.saveBtn} onPress={addCategory}>
+          <Text style={styles.saveText}>Add</Text>
+        </Pressable>
+      </View>
+
       {msg ? <Text style={msg.startsWith('Error') ? styles.errText : styles.msg}>{msg}</Text> : null}
-      <Pressable style={styles.saveBtn} onPress={save} disabled={busy}>
-        <Text style={styles.saveText}>{busy ? 'Saving…' : 'Save Fee'}</Text>
+      <Pressable style={[styles.saveBtn, busy && { opacity: 0.6 }]} onPress={() => void save()} disabled={busy}>
+        <Text style={styles.saveText}>{busy ? 'Saving…' : 'Save Settings'}</Text>
       </Pressable>
+      <Text style={styles.sectionNote}>Changes apply instantly across the app. Requires supabase/migration_customization.sql.</Text>
     </View>
   );
 }
@@ -313,11 +494,12 @@ function SettingsCard({ onSaved }: { onSaved: () => void }) {
 // ---- Roles ----
 function RolesCard() {
   const { profile } = useAuth();
+  const styles = useStyles(makeStyles);
   const [users, setUsers] = useState<Profile[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setUsers(await fetchProfilesSafe());
+    setUsers(await fetchProfiles());
   }, []);
 
   useEffect(() => {
@@ -401,6 +583,7 @@ function RolesCard() {
 
 // ---- Add Account: admin creates a user and assigns their role ----
 function AddAccountForm({ onCreated }: { onCreated: () => void }) {
+  const styles = useStyles(makeStyles);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -529,89 +712,105 @@ function AddAccountForm({ onCreated }: { onCreated: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+  root: { flex: 1, backgroundColor: c.bg },
   content: { padding: spacing(4), paddingBottom: spacing(8) },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
-  title: { fontSize: 20, fontWeight: '800', color: colors.primary, marginBottom: spacing(3) },
-  lockedTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
-  offline: { color: colors.warning, fontSize: 12, fontWeight: '600', marginBottom: spacing(3) },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: c.bg },
+  title: { fontSize: 20, fontWeight: '800', color: c.primary, marginBottom: spacing(3) },
+  lockedTitle: { fontSize: 17, fontWeight: '700', color: c.text },
+  offline: { color: c.warning, fontSize: 12, fontWeight: '600', marginBottom: spacing(3) },
   wideRow: { flexDirection: 'row', gap: spacing(5), alignItems: 'flex-start' },
   wideCol: { flex: 1, minWidth: 0 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(3), marginBottom: spacing(2) },
   card: {
-    backgroundColor: colors.card,
+    backgroundColor: c.card,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: c.border,
     padding: spacing(4),
     marginBottom: spacing(3),
     flexGrow: 1,
     minWidth: '45%',
   },
-  statLabel: { fontSize: 12, color: colors.textMuted },
-  statValue: { fontSize: 19, fontWeight: '800', color: colors.primary, marginTop: spacing(1) },
-  statSub: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  section: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: spacing(4), marginBottom: spacing(2) },
+  statLabel: { fontSize: 12, color: c.textMuted },
+  statValue: { fontSize: 19, fontWeight: '800', color: c.primary, marginTop: spacing(1) },
+  statSub: { fontSize: 11, color: c.textMuted, marginTop: 2 },
+  section: { fontSize: 15, fontWeight: '700', color: c.text, marginTop: spacing(4), marginBottom: spacing(2) },
   orderRow: { flexDirection: 'row', alignItems: 'center' },
-  orderName: { fontSize: 14, fontWeight: '600', color: colors.text },
-  orderSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  orderName: { fontSize: 14, fontWeight: '600', color: c.text },
+  orderSub: { fontSize: 12, color: c.textMuted, marginTop: 2 },
   badgeRow: { flexDirection: 'row', gap: spacing(1), marginTop: spacing(1) },
   statusBadge: { fontSize: 10, fontWeight: '800', paddingHorizontal: spacing(1.5), paddingVertical: 2, borderRadius: 6, overflow: 'hidden', textTransform: 'uppercase' },
-  orderTotal: { fontSize: 15, fontWeight: '800', color: colors.primary },
-  expandBox: { borderTopWidth: 1, borderTopColor: colors.border, marginTop: spacing(3), paddingTop: spacing(3) },
-  label: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: spacing(1) },
+  orderTotal: { fontSize: 15, fontWeight: '800', color: c.primary },
+  expandBox: { borderTopWidth: 1, borderTopColor: c.border, marginTop: spacing(3), paddingTop: spacing(3) },
+  label: { fontSize: 12, fontWeight: '600', color: c.textMuted, marginBottom: spacing(1) },
   input: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: 8,
+    borderWidth: 1, borderColor: c.border, borderRadius: 8,
     paddingHorizontal: spacing(3), paddingVertical: spacing(2.5),
-    fontSize: 15, backgroundColor: colors.bg, marginBottom: spacing(3),
+    fontSize: 15, backgroundColor: c.bg, marginBottom: spacing(3),
+    color: c.text,
   },
   btnRow: { flexDirection: 'row', gap: spacing(2), marginBottom: spacing(3), flexWrap: 'wrap' },
-  chip: { paddingHorizontal: spacing(3), paddingVertical: spacing(1.5), borderRadius: 20, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border },
-  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { fontSize: 12, color: colors.textMuted },
-  chipTextActive: { color: colors.white, fontWeight: '700' },
+  chip: { paddingHorizontal: spacing(3), paddingVertical: spacing(1.5), borderRadius: 20, backgroundColor: c.bg, borderWidth: 1, borderColor: c.border },
+  chipActive: { backgroundColor: c.primary, borderColor: c.primary },
+  chipText: { fontSize: 12, color: c.textMuted },
+  chipTextActive: { color: c.onPrimary, fontWeight: '700' },
   salesRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing(1.5) },
-  salesDay: { fontSize: 13, color: colors.text, flex: 1 },
-  salesOrders: { fontSize: 12, color: colors.textMuted, width: 80, textAlign: 'center' },
-  salesRevenue: { fontSize: 13, fontWeight: '700', color: colors.primary, width: 100, textAlign: 'right' },
+  salesDay: { fontSize: 13, color: c.text, flex: 1 },
+  salesOrders: { fontSize: 12, color: c.textMuted, width: 80, textAlign: 'center' },
+  salesRevenue: { fontSize: 13, fontWeight: '700', color: c.primary, width: 100, textAlign: 'right' },
   exportBtn: { flex: 1, borderRadius: 8, paddingVertical: spacing(2.5), alignItems: 'center' },
-  exportText: { color: colors.white, fontWeight: '700', fontSize: 13 },
-  msg: { color: colors.success, fontSize: 13, marginBottom: spacing(2) },
-  errText: { color: colors.danger, fontSize: 13, marginBottom: spacing(2) },
-  saveBtn: { backgroundColor: colors.primary, borderRadius: 8, paddingVertical: spacing(2.5), alignItems: 'center' },
-  saveText: { color: colors.white, fontWeight: '700' },
+  exportText: { color: c.onPrimary, fontWeight: '700', fontSize: 13 },
+  msg: { color: c.success, fontSize: 13, marginBottom: spacing(2) },
+  errText: { color: c.danger, fontSize: 13, marginBottom: spacing(2) },
+  saveBtn: { backgroundColor: c.primary, borderRadius: 8, paddingVertical: spacing(2.5), paddingHorizontal: spacing(4), alignItems: 'center' },
+  saveText: { color: c.onPrimary, fontWeight: '700' },
   addAccountBtn: {
-    backgroundColor: colors.successBg, borderWidth: 1, borderColor: colors.success,
+    backgroundColor: c.successBg, borderWidth: 1, borderColor: c.success,
     borderRadius: 8, paddingVertical: spacing(2.5), alignItems: 'center', marginBottom: spacing(3),
   },
-  addAccountText: { color: colors.success, fontWeight: '800' },
+  addAccountText: { color: c.success, fontWeight: '800' },
   addAccountForm: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: 10,
-    padding: spacing(3), marginBottom: spacing(3), backgroundColor: colors.bg,
+    borderWidth: 1, borderColor: c.border, borderRadius: 10,
+    padding: spacing(3), marginBottom: spacing(3), backgroundColor: c.bg,
   },
   roleChip: { flexGrow: 1 },
   passwordRow: { flexDirection: 'row', alignItems: 'center' },
   eyeBtn: {
     marginLeft: spacing(2), width: 44, height: 44, borderRadius: 8,
-    backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: c.bg, borderWidth: 1, borderColor: c.border,
     alignItems: 'center', justifyContent: 'center',
   },
   eyeText: { fontSize: 18 },
   deleteBtn: {
-    backgroundColor: colors.dangerBg, borderWidth: 1, borderColor: colors.danger,
+    backgroundColor: c.dangerBg, borderWidth: 1, borderColor: c.danger,
     borderRadius: 8, paddingHorizontal: spacing(2.5), paddingVertical: spacing(1.5),
   },
-  deleteBtnText: { color: colors.danger, fontWeight: '700', fontSize: 12 },
+  deleteBtnText: { color: c.danger, fontWeight: '700', fontSize: 12 },
   userRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing(3) },
-  userName: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1 },
+  userName: { fontSize: 14, fontWeight: '600', color: c.text, flex: 1 },
   roleBtns: { flexDirection: 'row', gap: spacing(1) },
   roleBtn: {
     paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8,
-    backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: c.bg, borderWidth: 1, borderColor: c.border,
   },
-  roleBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  roleBtnText: { fontSize: 12, color: colors.textMuted, textTransform: 'capitalize' },
-  roleBtnTextActive: { color: colors.white, fontWeight: '700' },
-  subEmpty: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
-});
+  roleBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
+  roleBtnText: { fontSize: 12, color: c.textMuted, textTransform: 'capitalize' },
+  roleBtnTextActive: { color: c.onPrimary, fontWeight: '700' },
+  subEmpty: { fontSize: 13, color: c.textMuted, textAlign: 'center' },
+  panelHeading: { fontSize: 14, fontWeight: '800', color: c.text, marginTop: spacing(2), marginBottom: spacing(2) },
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing(3) },
+  switchLabel: { fontSize: 13, fontWeight: '600', color: c.text },
+  swatchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(2), marginBottom: spacing(3) },
+  swatch: { width: 30, height: 30, borderRadius: 15, borderWidth: 2, borderColor: 'transparent' },
+  swatchActive: { borderColor: c.text },
+  payChipRow: { flexDirection: 'row', gap: spacing(2), marginBottom: spacing(3) },
+  sectionNote: { fontSize: 11, color: c.textMuted, marginTop: -spacing(1), marginBottom: spacing(3) },
+  catChipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(1.5), marginBottom: spacing(3) },
+  catChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing(2.5), paddingVertical: spacing(1.5), borderRadius: 14, backgroundColor: c.bg, borderWidth: 1, borderColor: c.border },
+  catChipText: { fontSize: 12, color: c.text },
+  catRemove: { color: c.danger, fontWeight: '800', marginLeft: spacing(1.5), fontSize: 12 },
+  catRow: { flexDirection: 'row', gap: spacing(2), alignItems: 'center', marginBottom: spacing(3) },
+  });
+}

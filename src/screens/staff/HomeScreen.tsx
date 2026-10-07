@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/services/auth';
 import { fetchProducts, fetchRecentOrders, syncQueuedOrders } from '@/services/db';
+import { useSettings, useStyles } from '@/services/settings';
 import { useSupabaseRealtime } from '@/services/useSupabaseRealtime';
 import { getQueue } from '@/store/cache';
 import { peso, isSameLocalDay } from '@/utils/format';
-import { colors, spacing } from '@/theme';
+import { isLowStock } from '@/utils/stock';
+import { colors, spacing, createStyleSheet } from '@/theme';
 import type { Order, Product } from '@/types';
 
 interface Props {
@@ -15,6 +17,8 @@ interface Props {
 
 export function HomeScreen({ onNewOrder, onGoStock }: Props) {
   const { profile, checkedIn, setCheckedIn, signOut } = useAuth();
+  const { settings } = useSettings();
+  const styles = useStyles(makeStyles);
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
@@ -47,7 +51,7 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
 
   const todayOrders = orders.filter((o) => isSameLocalDay(o.created_at));
   const todaySales = todayOrders.reduce((sum, o) => sum + Number(o.total), 0);
-  const lowStock = products.filter((p) => p.stock <= p.reorder_point);
+  const lowStock = products.filter((p) => isLowStock(p, settings.low_stock_threshold));
 
   async function toggleCheckIn() {
     const next = !checkedIn;
@@ -58,7 +62,7 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <View style={styles.headerRow}>
-        <Text style={styles.brand}>🏢 Metro Manila Hills</Text>
+        <Text style={styles.brand}>🏢 {settings.store_name}</Text>
         <Pressable
           style={styles.signOutBtn}
           onPress={() => {
@@ -137,7 +141,7 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
                 {p.stock === 0 ? 'OUT OF STOCK' : `${p.stock} left`}
               </Text>
             </View>
-            <Text style={styles.lowSub}>Reorder point: {p.reorder_point}</Text>
+            <Text style={styles.lowSub}>Reorder point: {p.reorder_point > 0 ? p.reorder_point : settings.low_stock_threshold}</Text>
           </View>
         ))
       )}
@@ -145,37 +149,39 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: spacing(4), paddingBottom: spacing(8) },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing(4) },
-  brand: { fontSize: 20, fontWeight: '800', color: colors.primary },
-  signOutBtn: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5) },
-  signOutText: { color: colors.danger, fontWeight: '700', fontSize: 13 },
-  offlineBanner: { backgroundColor: colors.warningBg, borderRadius: 10, padding: spacing(3), marginBottom: spacing(3) },
-  offlineText: { color: colors.warning, fontSize: 13, fontWeight: '600' },
-  card: { backgroundColor: colors.card, borderRadius: 12, padding: spacing(4), marginBottom: spacing(3), borderWidth: 1, borderColor: colors.border },
-  checkInCard: { flexDirection: 'row', alignItems: 'center' },
-  checkedIn: { backgroundColor: colors.successBg, borderColor: colors.success },
-  checkedOut: { backgroundColor: colors.dangerBg, borderColor: colors.danger },
-  checkInIcon: { fontSize: 32, marginRight: spacing(3) },
-  checkInName: { fontSize: 17, fontWeight: '700', color: colors.text },
-  checkInStatus: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  statsRow: { flexDirection: 'row', gap: spacing(3) },
-  statCard: { flex: 1, alignItems: 'center' },
-  statLabel: { fontSize: 12, color: colors.textMuted },
-  statValue: { fontSize: 20, fontWeight: '800', color: colors.primary, marginTop: spacing(1) },
-  pendingCard: { backgroundColor: colors.warningBg, borderColor: colors.warning },
-  pendingText: { color: colors.warning, fontWeight: '600', fontSize: 13 },
-  actionsRow: { flexDirection: 'row', gap: spacing(3), marginBottom: spacing(3) },
-  actionBtn: { flex: 1, borderRadius: 12, paddingVertical: spacing(4), alignItems: 'center' },
-  actionIcon: { fontSize: 26 },
-  actionText: { color: colors.white, fontWeight: '700', marginTop: spacing(1) },
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: spacing(3), marginBottom: spacing(3) },
-  lowRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  lowName: { fontSize: 15, fontWeight: '600', color: colors.text },
-  lowBadge: { fontSize: 12, fontWeight: '700', color: colors.warning, backgroundColor: colors.warningBg, paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
-  outBadge: { color: colors.danger, backgroundColor: colors.dangerBg },
-  lowSub: { fontSize: 12, color: colors.textMuted, marginTop: spacing(1) },
-  emptyText: { color: colors.textMuted, fontSize: 14, textAlign: 'center' },
-});
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+    root: { flex: 1, backgroundColor: c.bg },
+    content: { padding: spacing(4), paddingBottom: spacing(8) },
+    headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing(4) },
+    brand: { fontSize: 20, fontWeight: '800', color: c.primary, flex: 1 },
+    signOutBtn: { borderWidth: 1, borderColor: c.border, backgroundColor: c.card, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5) },
+    signOutText: { color: c.danger, fontWeight: '700', fontSize: 13 },
+    offlineBanner: { backgroundColor: c.warningBg, borderRadius: 10, padding: spacing(3), marginBottom: spacing(3) },
+    offlineText: { color: c.warning, fontSize: 13, fontWeight: '600' },
+    card: { backgroundColor: c.card, borderRadius: 12, padding: spacing(4), marginBottom: spacing(3), borderWidth: 1, borderColor: c.border },
+    checkInCard: { flexDirection: 'row', alignItems: 'center' },
+    checkedIn: { backgroundColor: c.successBg, borderColor: c.success },
+    checkedOut: { backgroundColor: c.dangerBg, borderColor: c.danger },
+    checkInIcon: { fontSize: 32, marginRight: spacing(3) },
+    checkInName: { fontSize: 17, fontWeight: '700', color: c.text },
+    checkInStatus: { fontSize: 13, color: c.textMuted, marginTop: 2 },
+    statsRow: { flexDirection: 'row', gap: spacing(3) },
+    statCard: { flex: 1, alignItems: 'center' },
+    statLabel: { fontSize: 12, color: c.textMuted },
+    statValue: { fontSize: 20, fontWeight: '800', color: c.primary, marginTop: spacing(1) },
+    pendingCard: { backgroundColor: c.warningBg, borderColor: c.warning },
+    pendingText: { color: c.warning, fontWeight: '600', fontSize: 13 },
+    actionsRow: { flexDirection: 'row', gap: spacing(3), marginBottom: spacing(3) },
+    actionBtn: { flex: 1, borderRadius: 12, paddingVertical: spacing(4), alignItems: 'center' },
+    actionIcon: { fontSize: 26 },
+    actionText: { color: c.onPrimary, fontWeight: '700', marginTop: spacing(1) },
+    sectionTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginTop: spacing(3), marginBottom: spacing(3) },
+    lowRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    lowName: { fontSize: 15, fontWeight: '600', color: c.text, flex: 1 },
+    lowBadge: { fontSize: 12, fontWeight: '700', color: c.warning, backgroundColor: c.warningBg, paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
+    outBadge: { color: c.danger, backgroundColor: c.dangerBg },
+    lowSub: { fontSize: 12, color: c.textMuted, marginTop: spacing(1) },
+    emptyText: { color: c.textMuted, fontSize: 14, textAlign: 'center' },
+  });
+}

@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '@/services/auth';
-import { fetchProducts, fetchSettings, findProductByBarcode, placeOrder } from '@/services/db';
+import { fetchProducts, findProductByBarcode, placeOrder } from '@/services/db';
+import { useSettings, useStyles } from '@/services/settings';
 import { BarcodeScanner } from '@/components/BarcodeScanner';
 import { peso } from '@/utils/format';
-import { colors, spacing } from '@/theme';
+import { isLowStock } from '@/utils/stock';
+import { colors, spacing, withAlpha, createStyleSheet } from '@/theme';
 import type { CartItem, Order, OrderItem, PaymentMethod, Product } from '@/types';
 
 interface Props {
@@ -19,6 +21,8 @@ const PAYMENT_OPTIONS: { key: PaymentMethod; label: string; icon: string }[] = [
 
 export function NewOrderScreen({ onOrderPlaced }: Props) {
   const { profile } = useAuth();
+  const { settings } = useSettings();
+  const styles = useStyles(makeStyles);
   const [products, setProducts] = useState<Product[]>([]);
   const [query, setQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -31,15 +35,32 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
   const [scanning, setScanning] = useState(false);
 
   const load = useCallback(async () => {
-    const [p, s] = await Promise.all([fetchProducts(), fetchSettings()]);
-    setProducts(p.data);
-    setOffline(p.offline);
-    setDeliveryFee(String(s.data.delivery_fee));
+    const res = await fetchProducts();
+    setProducts(res.data);
+    setOffline(res.offline);
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Delivery fee + payment selection follow the admin's ordering rules
+  useEffect(() => {
+    setDeliveryFee(String(settings.delivery_fee));
+  }, [settings.delivery_fee]);
+
+  const enabledMethods = useMemo(() => {
+    const enabled = PAYMENT_OPTIONS.filter((o) => settings.payment_methods.includes(o.key));
+    return enabled.length > 0 ? enabled : PAYMENT_OPTIONS;
+  }, [settings.payment_methods]);
+
+  // If the saved choice was disabled in settings, fall back to the first enabled one
+  useEffect(() => {
+    const first = enabledMethods[0];
+    if (first && !enabledMethods.some((o) => o.key === payment)) {
+      setPayment(first.key);
+    }
+  }, [enabledMethods, payment]);
 
   // Called by the barcode scanner with a scanned or typed code
   async function handleBarcode(code: string) {
@@ -86,7 +107,7 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
           i.productId === p.id ? { ...i, quantity: Math.min(i.quantity + 1, p.stock || 9999) } : i
         );
       }
-      return [...prev, { productId: p.id, name: p.name, price: Number(p.price), quantity: 1 }];
+      return [...prev, { productId: p.id, name: p.name, price: Number(p.price), quantity: 1, image_url: p.image_url }];
     });
   }
 
@@ -187,10 +208,15 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
           placeholderTextColor={colors.textMuted}
         />
         {filtered.map((p) => {
-          const low = p.stock <= p.reorder_point;
+          const low = isLowStock(p, settings.low_stock_threshold);
           const inCart = cart.find((i) => i.productId === p.id);
           return (
             <View key={p.id} style={styles.productRow}>
+              {p.image_url ? (
+                <View style={styles.thumbWrapper}>
+                  <img src={p.image_url} alt={p.name} style={{ width: 40, height: 40, borderRadius: 6, objectFit: 'cover' }} />
+                </View>
+              ) : null}
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName}>{p.name}</Text>
                 <Text style={[styles.productMeta, low && { color: colors.danger }]}>
@@ -218,6 +244,11 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
             <Text style={styles.section}>🧾 Cart</Text>
             {cart.map((i) => (
               <View key={i.productId} style={styles.cartRow}>
+                {i.image_url ? (
+                  <View style={[styles.thumbWrapper, { marginRight: spacing(2) }]}>
+                    <img src={i.image_url} alt={i.name} style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover' }} />
+                  </View>
+                ) : null}
                 <View style={{ flex: 1 }}>
                   <Text style={styles.productName}>{i.name}</Text>
                   <Text style={styles.productMeta}>
@@ -257,9 +288,9 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
           </View>
         </View>
 
-        {/* Payment */}
+        {/* Payment — only the methods enabled by the admin */}
         <View style={styles.paymentRow}>
-          {PAYMENT_OPTIONS.map((opt) => (
+          {enabledMethods.map((opt) => (
             <Pressable
               key={opt.key}
               style={[styles.payBtn, payment === opt.key && styles.payBtnActive]}
@@ -289,43 +320,46 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing(4), paddingBottom: spacing(2) },
-  title: { fontSize: 20, fontWeight: '800', color: colors.primary },
-  offlineTag: { color: colors.danger, backgroundColor: colors.dangerBg, fontWeight: '800', fontSize: 11, paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
-  content: { padding: spacing(4), paddingTop: 0, paddingBottom: spacing(8) },
-  label: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: spacing(1), marginTop: spacing(2) },
-  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15, backgroundColor: colors.card, marginBottom: spacing(2) },
-  search: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15, backgroundColor: colors.card, marginBottom: spacing(3) },
-  addProductsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  scanBtn: { backgroundColor: colors.primaryLight, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5) },
-  scanBtnText: { color: colors.white, fontWeight: '700', fontSize: 13 },
-  productRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: spacing(3), marginBottom: spacing(2) },
-  productName: { fontSize: 14, fontWeight: '600', color: colors.text },
-  productMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  inCart: { fontSize: 12, fontWeight: '700', color: colors.primary, marginRight: spacing(2) },
-  addBtn: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
-  addBtnText: { color: colors.white, fontWeight: '700', fontSize: 13 },
-  empty: { textAlign: 'center', color: colors.textMuted, marginVertical: spacing(3) },
-  section: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: spacing(4), marginBottom: spacing(2) },
-  cartRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: spacing(3), marginBottom: spacing(2) },
-  qtyBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border },
-  qtyBtnText: { fontSize: 18, fontWeight: '700', color: colors.primary },
-  qty: { width: 32, textAlign: 'center', fontSize: 15, fontWeight: '700', color: colors.text },
-  totalsCard: { backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: spacing(4), marginTop: spacing(4) },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing(2) },
-  totalLabel: { fontSize: 14, color: colors.textMuted },
-  totalValue: { fontSize: 14, fontWeight: '600', color: colors.text },
-  feeInput: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: spacing(2), paddingVertical: spacing(1), fontSize: 14, width: 90, textAlign: 'right', backgroundColor: colors.bg },
-  grandTotalRow: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing(2), marginBottom: 0 },
-  grandTotalLabel: { fontSize: 16, fontWeight: '800', color: colors.text },
-  grandTotal: { fontSize: 20, fontWeight: '800', color: colors.primary },
-  paymentRow: { flexDirection: 'row', gap: spacing(2), marginTop: spacing(3) },
-  payBtn: { flex: 1, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: spacing(2.5), alignItems: 'center' },
-  payBtnActive: { borderColor: colors.primary, backgroundColor: '#e8f0fa' },
-  payLabel: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  payLabelActive: { color: colors.primary, fontWeight: '700' },
-  completeBtn: { backgroundColor: colors.success, borderRadius: 12, paddingVertical: spacing(4), alignItems: 'center', marginTop: spacing(4) },
-  completeText: { color: colors.white, fontWeight: '800', fontSize: 15 },
-});
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+    root: { flex: 1, backgroundColor: c.bg },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing(4), paddingBottom: spacing(2) },
+    title: { fontSize: 20, fontWeight: '800', color: c.primary },
+    offlineTag: { color: c.danger, backgroundColor: c.dangerBg, fontWeight: '800', fontSize: 11, paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
+    content: { padding: spacing(4), paddingTop: 0, paddingBottom: spacing(8) },
+    label: { fontSize: 12, fontWeight: '600', color: c.textMuted, marginBottom: spacing(1), marginTop: spacing(2) },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15, backgroundColor: c.card, marginBottom: spacing(2), color: c.text },
+    search: { borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15, backgroundColor: c.card, marginBottom: spacing(3), color: c.text },
+    addProductsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    scanBtn: { backgroundColor: c.primaryLight, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5) },
+    scanBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 13 },
+    productRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, borderRadius: 10, borderWidth: 1, borderColor: c.border, padding: spacing(3), marginBottom: spacing(2) },
+    thumbWrapper: { width: 40, height: 40, borderRadius: 6, overflow: 'hidden', backgroundColor: c.bg, marginRight: spacing(3) },
+    productName: { fontSize: 14, fontWeight: '600', color: c.text },
+    productMeta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    inCart: { fontSize: 12, fontWeight: '700', color: c.primary, marginRight: spacing(2) },
+    addBtn: { backgroundColor: c.primary, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
+    addBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 13 },
+    empty: { textAlign: 'center', color: c.textMuted, marginVertical: spacing(3) },
+    section: { fontSize: 15, fontWeight: '700', color: c.text, marginTop: spacing(4), marginBottom: spacing(2) },
+    cartRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, borderRadius: 10, borderWidth: 1, borderColor: c.border, padding: spacing(3), marginBottom: spacing(2) },
+    qtyBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: c.bg, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.border },
+    qtyBtnText: { fontSize: 18, fontWeight: '700', color: c.primary },
+    qty: { width: 32, textAlign: 'center', fontSize: 15, fontWeight: '700', color: c.text },
+    totalsCard: { backgroundColor: c.card, borderRadius: 12, borderWidth: 1, borderColor: c.border, padding: spacing(4), marginTop: spacing(4) },
+    totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing(2) },
+    totalLabel: { fontSize: 14, color: c.textMuted },
+    totalValue: { fontSize: 14, fontWeight: '600', color: c.text },
+    feeInput: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: spacing(2), paddingVertical: spacing(1), fontSize: 14, width: 90, textAlign: 'right', backgroundColor: c.bg, color: c.text },
+    grandTotalRow: { borderTopWidth: 1, borderTopColor: c.border, paddingTop: spacing(2), marginBottom: 0 },
+    grandTotalLabel: { fontSize: 16, fontWeight: '800', color: c.text },
+    grandTotal: { fontSize: 20, fontWeight: '800', color: c.primary },
+    paymentRow: { flexDirection: 'row', gap: spacing(2), marginTop: spacing(3) },
+    payBtn: { flex: 1, backgroundColor: c.card, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingVertical: spacing(2.5), alignItems: 'center' },
+    payBtnActive: { borderColor: c.primary, backgroundColor: withAlpha(c.primary, 0.12) },
+    payLabel: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    payLabelActive: { color: c.primary, fontWeight: '700' },
+    completeBtn: { backgroundColor: c.success, borderRadius: 12, paddingVertical: spacing(4), alignItems: 'center', marginTop: spacing(4) },
+    completeText: { color: c.onPrimary, fontWeight: '800', fontSize: 15 },
+  });
+}

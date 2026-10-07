@@ -2,9 +2,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '@/services/auth';
 import { adjustStock, bulkAdjustStock, bulkDeleteProducts, fetchProducts, upsertProduct } from '@/services/db';
+import { useSettings, useStyles } from '@/services/settings';
 import { useSupabaseRealtime } from '@/services/useSupabaseRealtime';
 import { peso } from '@/utils/format';
-import { colors, spacing } from '@/theme';
+import { isLowStock } from '@/utils/stock';
+import { colors, spacing, withAlpha, createStyleSheet } from '@/theme';
 import type { Product } from '@/types';
 
 type SortKey = 'name' | 'stock' | 'price' | 'category';
@@ -18,6 +20,8 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
 
 export function StockScreen() {
   const { profile } = useAuth();
+  const { settings } = useSettings();
+  const styles = useStyles(makeStyles);
   const isAdmin = profile?.role === 'admin' || profile?.role === 'manager';
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -61,7 +65,7 @@ export function StockScreen() {
   function bulkAdjust(delta: number) {
     const ids = [...selected];
     if (delta === 0 || ids.length === 0) return;
-    void bulkAdjustStock(ids, Math.abs(delta) * (delta > 0 ? 1 : -1), 'bulk', profile?.id ?? null).then(({ error }) => {
+    void bulkAdjustStock(ids, delta, 'bulk', profile?.id ?? null).then(({ error }) => {
       if (error) Alert.alert('Error', error);
       setSelected(new Set());
       void load();
@@ -180,7 +184,7 @@ export function StockScreen() {
             <Text style={styles.bulkBtnText}>−1</Text>
           </Pressable>
           <Pressable style={[styles.bulkBtn, styles.bulkDanger]} onPress={confirmBulkDelete}>
-            <Text style={[styles.bulkBtnText, { color: colors.white }]}>Delete</Text>
+            <Text style={[styles.bulkBtnText, { color: colors.onPrimary }]}>Delete</Text>
           </Pressable>
           <Pressable onPress={() => setSelected(new Set())}>
             <Text style={styles.bulkClear}>Clear</Text>
@@ -190,7 +194,7 @@ export function StockScreen() {
 
       <ScrollView contentContainerStyle={styles.list}>
         {filtered.map((p) => {
-          const low = p.stock <= p.reorder_point;
+          const low = isLowStock(p, settings.low_stock_threshold);
           const isSelected = selected.has(p.id);
           return (
             <Pressable
@@ -205,16 +209,28 @@ export function StockScreen() {
               }
               onLongPress={() => isAdmin && toggleSelect(p.id)}
             >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.name}>{p.name}</Text>
-                <Text style={styles.meta}>
-                  {p.sku ?? '—'} · {p.category ?? 'Uncategorized'}
-                </Text>
-                <View style={styles.badgeRow}>
-                  <Text style={[styles.badge, low ? styles.badgeLow : styles.badgeOk]}>
-                    {p.stock === 0 ? 'OUT OF STOCK' : low ? `LOW · ${p.stock} left` : `In stock: ${p.stock}`}
+              <View style={styles.cardContent}>
+                {p.image_url ? (
+                  <View style={styles.thumbWrapper}>
+                    {/* Standard HTML img for RNW web support */}
+                    <img src={p.image_url} alt={p.name} style={{ width: 48, height: 48, borderRadius: 8, objectFit: 'cover' }} />
+                  </View>
+                ) : (
+                  <View style={styles.thumbPlaceholder}>
+                    <Text style={styles.thumbPlaceholderText}>📦</Text>
+                  </View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.name}>{p.name}</Text>
+                  <Text style={styles.meta}>
+                    {p.sku ?? '—'} · {p.category ?? 'Uncategorized'}
                   </Text>
-                  <Text style={styles.price}>{peso(Number(p.price))}</Text>
+                  <View style={styles.badgeRow}>
+                    <Text style={[styles.badge, low ? styles.badgeLow : styles.badgeOk]}>
+                      {p.stock === 0 ? 'OUT OF STOCK' : low ? `LOW · ${p.stock} left` : `In stock: ${p.stock}`}
+                    </Text>
+                    <Text style={styles.price}>{peso(Number(p.price))}</Text>
+                  </View>
                 </View>
               </View>
             </Pressable>
@@ -255,6 +271,9 @@ function EditProductModal({
   onSaved: () => void;
 }) {
   const { profile } = useAuth();
+  const { settings } = useSettings();
+  const styles = useStyles(makeStyles);
+  const [imageUrl, setImageUrl] = useState('');
   const [name, setName] = useState('');
   const [sku, setSku] = useState('');
   const [barcode, setBarcode] = useState('');
@@ -266,9 +285,17 @@ function EditProductModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Category suggestions: the admin's list plus anything already on this product
+  const categorySuggestions = useMemo(() => {
+    const set = new Set<string>(settings.categories);
+    if (product?.category) set.add(product.category);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [settings.categories, product]);
+
   useEffect(() => {
     if (product) {
       setName(product.name);
+      setImageUrl(product.image_url ?? '');
       setSku(product.sku ?? '');
       setBarcode(product.barcode ?? '');
       setCategory(product.category ?? '');
@@ -278,16 +305,17 @@ function EditProductModal({
       setAdjust('0');
     } else {
       setName('');
+      setImageUrl('');
       setSku('');
       setBarcode('');
       setCategory('');
       setPrice('');
       setStock('0');
-      setReorder('10');
+      setReorder(String(settings.low_stock_threshold));
       setAdjust('0');
     }
     setError(null);
-  }, [product, visible]);
+  }, [product, visible, settings.low_stock_threshold]);
 
   async function save() {
     setBusy(true);
@@ -301,6 +329,7 @@ function EditProductModal({
     const { error: err } = await upsertProduct({
       ...(product ? { id: product.id } : {}),
       name: name.trim(),
+      image_url: imageUrl.trim() || null,
       sku: sku.trim() || null,
       barcode: barcode.trim() || null,
       category: category.trim() || null,
@@ -331,6 +360,9 @@ function EditProductModal({
           <Text style={styles.label}>Name</Text>
           <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Cement 40kg" />
 
+          <Text style={styles.label}>Image URL (optional)</Text>
+          <TextInput style={styles.input} value={imageUrl} onChangeText={setImageUrl} placeholder="https://example.com/item.jpg" />
+
           <View style={styles.row}>
             <View style={{ flex: 1, marginRight: spacing(2) }}>
               <Text style={styles.label}>SKU</Text>
@@ -342,12 +374,29 @@ function EditProductModal({
             </View>
           </View>
 
+          {categorySuggestions.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              {categorySuggestions.map((c) => {
+                const active = category.trim().toLowerCase() === c.toLowerCase();
+                return (
+                  <Pressable
+                    key={c}
+                    style={[styles.chip, active && styles.chipActive]}
+                    onPress={() => setCategory(active ? '' : c)}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : null}
+
           <Text style={styles.label}>Barcode (for scan-to-add)</Text>
           <TextInput style={styles.input} value={barcode} onChangeText={setBarcode} placeholder="Scan or type product barcode" keyboardType="numbers-and-punctuation" />
 
           <View style={styles.row}>
             <View style={{ flex: 1, marginRight: spacing(2) }}>
-              <Text style={styles.label}>Price (₱)</Text>
+              <Text style={styles.label}>Price ({settings.currency_symbol})</Text>
               <TextInput style={styles.input} value={price} onChangeText={setPrice} keyboardType="decimal-pad" />
             </View>
             <View style={{ flex: 1 }}>
@@ -384,55 +433,67 @@ function EditProductModal({
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing(4), paddingBottom: spacing(2) },
-  title: { fontSize: 20, fontWeight: '800', color: colors.primary },
-  addButton: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
-  addText: { color: colors.white, fontWeight: '700' },
-  offline: { color: colors.warning, fontSize: 12, fontWeight: '600', paddingHorizontal: spacing(4) },
-  search: {
-    backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
-    marginHorizontal: spacing(4), marginTop: spacing(2), paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15,
-  },
-  sortRow: { marginTop: spacing(2), flexGrow: 0 },
-  sortRowContent: { paddingHorizontal: spacing(4), gap: spacing(2) },
-  sortChip: {
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: 20, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5),
-  },
-  sortChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  sortChipText: { fontSize: 13, color: colors.textMuted, fontWeight: '600' },
-  sortChipTextActive: { color: colors.white, fontWeight: '700' },
-  list: { padding: spacing(4) },
-  card: { backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: spacing(4), marginBottom: spacing(3) },
-  cardSelected: { borderColor: colors.primary, backgroundColor: '#e8f0fa' },
-  bulkBar: { flexDirection: 'row', alignItems: 'center', gap: spacing(2), backgroundColor: colors.card, marginHorizontal: spacing(4), marginTop: spacing(2), padding: spacing(2), borderRadius: 10, borderWidth: 1, borderColor: colors.primary },
-  bulkCount: { fontWeight: '700', color: colors.primary, fontSize: 13 },
-  bulkBtn: { backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: spacing(2.5), paddingVertical: spacing(1.5) },
-  bulkBtnText: { fontSize: 12, fontWeight: '700', color: colors.text },
-  bulkDanger: { backgroundColor: colors.danger, borderColor: colors.danger },
-  bulkClear: { fontSize: 12, color: colors.textMuted },
-  hintText: { fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: spacing(2) },
-  name: { fontSize: 16, fontWeight: '700', color: colors.text },
-  meta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  badgeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing(2) },
-  badge: { fontSize: 12, fontWeight: '700', paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
-  badgeOk: { color: colors.success, backgroundColor: colors.successBg },
-  badgeLow: { color: colors.danger, backgroundColor: colors.dangerBg },
-  price: { fontSize: 16, fontWeight: '800', color: colors.primary },
-  empty: { textAlign: 'center', color: colors.textMuted, marginTop: spacing(6) },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalCard: { backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing(5), maxHeight: '90%' },
-  modalTitle: { fontSize: 18, fontWeight: '800', color: colors.text, marginBottom: spacing(3) },
-  label: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: spacing(1) },
-  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), fontSize: 15, backgroundColor: colors.bg, marginBottom: spacing(3) },
-  row: { flexDirection: 'row' },
-  error: { color: colors.danger, fontSize: 13, marginBottom: spacing(2) },
-  btn: { flex: 1, borderRadius: 10, paddingVertical: spacing(3), alignItems: 'center' },
-  btnGhost: { backgroundColor: colors.bg, marginRight: spacing(2) },
-  btnGhostText: { color: colors.textMuted, fontWeight: '700' },
-  btnPrimary: { backgroundColor: colors.primary },
-  btnPrimaryText: { color: colors.white, fontWeight: '700' },
-});
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+    root: { flex: 1, backgroundColor: c.bg },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: c.bg },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing(4), paddingBottom: spacing(2) },
+    title: { fontSize: 20, fontWeight: '800', color: c.primary },
+    addButton: { backgroundColor: c.primary, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
+    addText: { color: c.onPrimary, fontWeight: '700' },
+    offline: { color: c.warning, fontSize: 12, fontWeight: '600', paddingHorizontal: spacing(4) },
+    search: {
+      backgroundColor: c.card, borderRadius: 10, borderWidth: 1, borderColor: c.border,
+      marginHorizontal: spacing(4), marginTop: spacing(2), paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15,
+      color: c.text,
+    },
+    sortRow: { marginTop: spacing(2), flexGrow: 0 },
+    sortRowContent: { paddingHorizontal: spacing(4), gap: spacing(2) },
+    sortChip: {
+      backgroundColor: c.card, borderWidth: 1, borderColor: c.border,
+      borderRadius: 20, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5),
+    },
+    sortChipActive: { backgroundColor: c.primary, borderColor: c.primary },
+    sortChipText: { fontSize: 13, color: c.textMuted, fontWeight: '600' },
+    sortChipTextActive: { color: c.onPrimary, fontWeight: '700' },
+    list: { padding: spacing(4) },
+    card: { backgroundColor: c.card, borderRadius: 12, borderWidth: 1, borderColor: c.border, padding: spacing(4), marginBottom: spacing(3) },
+    cardSelected: { borderColor: c.primary, backgroundColor: withAlpha(c.primary, 0.12) },
+    cardContent: { flexDirection: 'row', alignItems: 'center', gap: spacing(3) },
+    thumbWrapper: { width: 48, height: 48, borderRadius: 8, overflow: 'hidden', backgroundColor: c.bg },
+    thumbPlaceholder: { width: 48, height: 48, borderRadius: 8, backgroundColor: c.bg, borderWidth: 1, borderColor: c.border, alignItems: 'center', justifyContent: 'center' },
+    thumbPlaceholderText: { fontSize: 20 },
+    bulkBar: { flexDirection: 'row', alignItems: 'center', gap: spacing(2), backgroundColor: c.card, marginHorizontal: spacing(4), marginTop: spacing(2), padding: spacing(2), borderRadius: 10, borderWidth: 1, borderColor: c.primary },
+    bulkCount: { fontWeight: '700', color: c.primary, fontSize: 13 },
+    bulkBtn: { backgroundColor: c.bg, borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: spacing(2.5), paddingVertical: spacing(1.5) },
+    bulkBtnText: { fontSize: 12, fontWeight: '700', color: c.text },
+    bulkDanger: { backgroundColor: c.danger, borderColor: c.danger },
+    bulkClear: { fontSize: 12, color: c.textMuted },
+    hintText: { fontSize: 12, color: c.textMuted, textAlign: 'center', marginTop: spacing(2) },
+    name: { fontSize: 16, fontWeight: '700', color: c.text },
+    meta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    badgeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing(2) },
+    badge: { fontSize: 12, fontWeight: '700', paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
+    badgeOk: { color: c.success, backgroundColor: c.successBg },
+    badgeLow: { color: c.danger, backgroundColor: c.dangerBg },
+    price: { fontSize: 16, fontWeight: '800', color: c.primary },
+    empty: { textAlign: 'center', color: c.textMuted, marginTop: spacing(6) },
+    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    modalCard: { backgroundColor: c.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing(5), maxHeight: '90%' },
+    modalTitle: { fontSize: 18, fontWeight: '800', color: c.text, marginBottom: spacing(3) },
+    label: { fontSize: 12, fontWeight: '600', color: c.textMuted, marginBottom: spacing(1) },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), fontSize: 15, backgroundColor: c.bg, marginBottom: spacing(3), color: c.text },
+    row: { flexDirection: 'row' },
+    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(1.5), marginTop: -spacing(1.5), marginBottom: spacing(2) },
+    chip: { paddingHorizontal: spacing(2.5), paddingVertical: spacing(1), borderRadius: 14, backgroundColor: c.bg, borderWidth: 1, borderColor: c.border },
+    chipActive: { backgroundColor: c.primary, borderColor: c.primary },
+    chipText: { fontSize: 12, color: c.textMuted },
+    chipTextActive: { color: c.onPrimary, fontWeight: '700' },
+    error: { color: c.danger, fontSize: 13, marginBottom: spacing(2) },
+    btn: { flex: 1, borderRadius: 10, paddingVertical: spacing(3), alignItems: 'center' },
+    btnGhost: { backgroundColor: c.bg, marginRight: spacing(2) },
+    btnGhostText: { color: c.textMuted, fontWeight: '700' },
+    btnPrimary: { backgroundColor: c.primary },
+    btnPrimaryText: { color: c.onPrimary, fontWeight: '700' },
+  });
+}

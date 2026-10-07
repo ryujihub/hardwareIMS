@@ -1,10 +1,28 @@
 import { supabase } from './supabase';
-import { cacheGet, cacheSet, enqueueOrder, getQueue, removeQueuedOrder, CACHE_KEYS } from '@/store/cache';
-import type { CartItem, Order, OrderItem, OrderStatus, PaymentMethod, PaymentStatus, Product, Profile, QueuedOrder, Settings } from '@/types';
+import { cacheGet, cacheSet, enqueueOrder, getQueue, replaceQueue, CACHE_KEYS } from '@/store/cache';
+import { DEFAULT_SETTINGS, type CartItem, type Order, type OrderItem, type OrderStatus, type PaymentMethod, type PaymentStatus, type Product, type Profile, type QueuedOrder, type Settings } from '@/types';
 
 export interface Fetched<T> {
   data: T;
   offline: boolean;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && err !== null) {
+    const maybe = err as { message?: unknown };
+    if (typeof maybe.message === 'string') return maybe.message;
+  }
+  return String(err ?? 'Something went wrong');
+}
+
+// Distinguishes connectivity failures (queue the order offline) from
+// validation/permission failures (surface the error to the user).
+function isNetworkError(err: unknown): boolean {
+  const msg = errorMessage(err).toLowerCase();
+  return /network|failed to fetch|fetch failed|load failed|timed?\s?out|connection|socket|offline|dns/.test(
+    msg
+  );
 }
 
 // ---------- Products ----------
@@ -57,16 +75,16 @@ export async function bulkDeleteProducts(productIds: string[]): Promise<{ error:
 }
 
 export async function upsertProduct(p: Partial<Product> & { name: string; price: number }): Promise<{ error: string | null }> {
-  // The barcode column requires the phase 2-3 migration. If it isn't applied
-  // yet, retry without the barcode key so the save still succeeds.
+  // The barcode and image_url columns require migrations. If they aren't applied
+  // yet, retry without those keys so the save still succeeds.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { barcode, ...rest } = p;
+  const { barcode, image_url, ...rest } = p;
   const { error } = await supabase.from('products').upsert(p);
-  if (error && /barcode/i.test(error.message)) {
+  if (error && /barcode|image_url/i.test(error.message)) {
     const { error: retryError } = await supabase.from('products').upsert(rest);
     return {
       error: retryError
-        ? `${retryError.message} (barcode skipped — run supabase/migration_phase2_3.sql to enable barcodes)`
+        ? `${retryError.message} (barcode/image_url skipped — run migrations in supabase/ folder to enable)`
         : null,
     };
   }
@@ -79,46 +97,70 @@ export async function deleteProduct(id: string): Promise<{ error: string | null 
 }
 
 export async function adjustStock(productId: string, delta: number, reason: string, staffId: string | null): Promise<{ error: string | null }> {
-  const { data: product } = await supabase
-    .from('products')
-    .select('stock')
-    .eq('id', productId)
-    .single();
-  const current = product?.stock ?? 0;
-  const next = Math.max(current + delta, 0);
-  const { error } = await supabase
-    .from('products')
-    .update({ stock: next, updated_at: new Date().toISOString() })
-    .eq('id', productId);
-  if (error) return { error: error.message };
-  // Audit trail entry (RLS allows all authenticated inserts)
-  await supabase.from('stock_adjustments').insert({
-    product_id: productId,
-    delta,
-    reason,
-    staff_id: staffId,
-  });
-  return { error: null };
+  // bulk_add_stock applies `greatest(stock + delta, 0)` atomically on the
+  // server, so two devices adjusting at once can't lose an update.
+  return bulkAdjustStock([productId], delta, reason, staffId);
 }
 
 // ---------- Settings ----------
 
+// Columns written by saveSettings — guarded so a missing customization
+// migration only affects the columns it actually provides.
+const SETTINGS_COLUMNS = [
+  'delivery_fee',
+  'store_name',
+  'tagline',
+  'currency_symbol',
+  'receipt_footer',
+  'primary_color',
+  'accent_color',
+  'dark_mode',
+  'payment_methods',
+  'low_stock_threshold',
+  'categories',
+] as const;
+
 export async function fetchSettings(): Promise<Fetched<Settings>> {
   try {
-    const { data, error } = await supabase.from('settings').select('delivery_fee').eq('id', 1).single();
+    // select('*') is resilient: if the customization migration hasn't run,
+    // Postgres just returns delivery_fee and the rest falls back to defaults.
+    const { data, error } = await supabase.from('settings').select('*').eq('id', 1).single();
     if (error) throw error;
-    const settings = { delivery_fee: Number(data?.delivery_fee ?? 50) };
+    const settings = normalizeSettings(data as Partial<Settings> | null);
     await cacheSet(CACHE_KEYS.settings, settings);
     return { data: settings, offline: false };
   } catch {
-    const cached = (await cacheGet<Settings>(CACHE_KEYS.settings)) ?? { delivery_fee: 50 };
-    return { data: cached, offline: true };
+    const cached = await cacheGet<Settings>(CACHE_KEYS.settings);
+    return { data: normalizeSettings(cached), offline: true };
   }
 }
 
-export async function updateDeliveryFee(fee: number): Promise<{ error: string | null }> {
-  const { error } = await supabase.from('settings').update({ delivery_fee: fee, updated_at: new Date().toISOString() }).eq('id', 1);
-  return { error: error ? error.message : null };
+function normalizeSettings(raw: Partial<Settings> | null | undefined): Settings {
+  const merged: Settings = { ...DEFAULT_SETTINGS, ...raw };
+  if (!Array.isArray(merged.payment_methods) || merged.payment_methods.length === 0) {
+    merged.payment_methods = [...DEFAULT_SETTINGS.payment_methods];
+  }
+  if (!Array.isArray(merged.categories)) merged.categories = [];
+  merged.delivery_fee = Number.isFinite(Number(merged.delivery_fee)) ? Number(merged.delivery_fee) : DEFAULT_SETTINGS.delivery_fee;
+  merged.low_stock_threshold = Number.isFinite(Number(merged.low_stock_threshold))
+    ? Number(merged.low_stock_threshold)
+    : DEFAULT_SETTINGS.low_stock_threshold;
+  return merged;
+}
+
+export async function updateSettings(patch: Partial<Settings>): Promise<{ error: string | null }> {
+  const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  const source = patch as unknown as Record<string, unknown>;
+  for (const col of SETTINGS_COLUMNS) {
+    if (col in source) row[col] = source[col];
+  }
+  const { error } = await supabase.from('settings').update(row).eq('id', 1);
+  if (!error) return { error: null };
+  return {
+    error: /pgrst204|column/i.test(error.message)
+      ? `${error.message} — run supabase/migration_customization.sql to enable customization`
+      : error.message,
+  };
 }
 
 // ---------- Orders ----------
@@ -187,7 +229,12 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     if (itemsError) throw itemsError;
 
     return { ok: true, offline: false, orderId: order.id };
-  } catch {
+  // Only queue when the failure looks like a network problem — otherwise a
+  // validation/permission error would silently become an un-syncable order.
+  } catch (err) {
+    if (!isNetworkError(err)) {
+      return { ok: false, error: errorMessage(err) };
+    }
     // Offline path: persist locally and sync later
     const queued: QueuedOrder = {
       localId: `local_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
@@ -228,10 +275,6 @@ export async function syncQueuedOrders(): Promise<number> {
 
   await replaceQueue(failed);
   return synced;
-}
-
-async function replaceQueue(queue: QueuedOrder[]): Promise<void> {
-  await cacheSet(CACHE_KEYS.queue, queue);
 }
 
 async function placeOrderOnline(q: QueuedOrder): Promise<boolean> {

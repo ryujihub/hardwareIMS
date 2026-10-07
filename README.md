@@ -11,6 +11,7 @@ Mobile-first inventory & order management app (Phase 1 MVP) built with **Expo (R
 - **Stock** — searchable list, low-stock badges, admin add/edit products with audited stock adjustments
 - **Receipts** — on-screen receipt + Print/Save-as-PDF via expo-print
 - **Admin dashboard** — today's stats, inventory value, pending-sync count, recent orders, staff leaderboard, delivery fee setting, role management
+- **Customizable** — admins can rebrand the app (store name, tagline, currency, receipt footer), restyle it (primary/accent colors, dark mode), tune ordering rules (payment methods, low-stock threshold), and manage the product category list — all from Admin → Settings, applied instantly
 
 ## 1. Set up the database (one time, ~2 minutes)
 
@@ -19,6 +20,8 @@ The Supabase project **HardwareIMS** already exists. Apply the schema:
 1. Open https://supabase.com/dashboard/project/sbxjobepecuyhkmbfysw/sql/new
 2. Paste the entire contents of `supabase/schema.sql`
 3. Click **Run**
+
+> Already installed before customization existed? Run `supabase/migration_customization.sql` instead — it adds the settings columns (branding, theme, ordering rules, categories) to your existing database. The app works either way; without the migration it just falls back to the built-in defaults.
 
 This creates the tables (`profiles`, `products`, `customers`, `orders`, `order_items`, `stock_adjustments`, `settings`), triggers (auto-profile on signup, auto stock-decrement on order items), row-level security policies, seed products, and realtime publication.
 
@@ -62,6 +65,19 @@ supabase/schema.sql      # Paste into SQL editor
 ```
 
 **Offline behavior:** reads fall back to the last cached snapshot (an offline banner appears); writes to `orders` are queued with a local ID and flushed by `syncQueuedOrders()` on reconnect, app launch, and check-in. The receipt marks offline orders with the queued ID until synced.
+
+## Customization
+
+Everything in **Admin → Settings** is stored in the single `settings` row and applies live:
+
+| Group | What admins can change |
+| --- | --- |
+| 🏷️ Branding | Store name & tagline (login screen, headers, receipts, PDF reports), currency symbol, receipt footer |
+| 🎨 Appearance | Primary & accent color (preset swatches or any hex), dark mode |
+| 🛒 Ordering rules | Default delivery fee, which payment methods are accepted, low-stock alert threshold |
+| 🗂️ Categories | The product category quick-picks used when adding/editing products |
+
+Settings are cached on-device, so the customization survives offline use. The theme engine (`src/theme/index.ts`) mutates a shared palette; every screen rebuilds its styles when the settings version changes, so no restart is needed.
 
 ## Security model (RLS)
 

@@ -3,7 +3,8 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabase';
-import { peso, formatDateTime } from '@/utils/format';
+import { getSettings } from './settings';
+import { peso, formatDateTime, escapeHtml } from '@/utils/format';
 
 export interface DailySalesRow {
   day: string;
@@ -36,6 +37,7 @@ export function buildSalesCsv(rows: DailySalesRow[]): string {
 }
 
 function buildSalesHtml(rows: DailySalesRow[], title: string): string {
+  const { store_name, primary_color } = getSettings();
   const body = rows
     .map(
       (r) => `<tr>
@@ -49,10 +51,10 @@ function buildSalesHtml(rows: DailySalesRow[], title: string): string {
   const grandTotal = rows.reduce((s, r) => s + Number(r.total_revenue), 0);
 
   return `<html><body style="font-family: sans-serif; padding: 24px;">
-    <h1 style="margin:0 0 4px">Metro Manila Hills</h1>
-    <p style="margin:0 0 16px; color:#555">${title} — generated ${formatDateTime(new Date().toISOString())}</p>
+    <h1 style="margin:0 0 4px">${escapeHtml(store_name)}</h1>
+    <p style="margin:0 0 16px; color:#555">${escapeHtml(title)} — generated ${formatDateTime(new Date().toISOString())}</p>
     <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%; font-size:13px">
-      <tr style="background:#1e3a5f; color:#fff">
+      <tr style="background:${primary_color}; color:#fff">
         <th>Date</th><th>Orders</th><th>Revenue</th><th>Delivery</th>
       </tr>
       ${body}

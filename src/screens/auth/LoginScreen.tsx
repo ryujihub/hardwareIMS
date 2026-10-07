@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '@/services/auth';
-import { colors, spacing } from '@/theme';
+import { useSettings, useStyles } from '@/services/settings';
+import { colors, spacing, createStyleSheet } from '@/theme';
 
 export function LoginScreen() {
   const { signIn } = useAuth();
+  const { settings } = useSettings();
+  const styles = useStyles(makeStyles);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -26,8 +29,8 @@ export function LoginScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.logo}>🏢</Text>
-        <Text style={styles.title}>Metro Manila Hills</Text>
-        <Text style={styles.subtitle}>Construction Supply & Trading — Inventory System</Text>
+        <Text style={styles.title}>{settings.store_name}</Text>
+        <Text style={styles.subtitle}>{settings.tagline}</Text>
       </View>
 
       <View style={styles.card}>
@@ -65,7 +68,7 @@ export function LoginScreen() {
 
         <Pressable style={[styles.button, busy && { opacity: 0.6 }]} onPress={handleSignIn} disabled={busy}>
           {busy ? (
-            <ActivityIndicator color={colors.white} />
+            <ActivityIndicator color={colors.onPrimary} />
           ) : (
             <Text style={styles.buttonText}>Sign In</Text>
           )}
@@ -77,33 +80,36 @@ export function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.primary, justifyContent: 'center', padding: spacing(6) },
-  header: { alignItems: 'center', marginBottom: spacing(8) },
-  logo: { fontSize: 48, marginBottom: spacing(2) },
-  title: { fontSize: 26, fontWeight: '800', color: colors.white },
-  subtitle: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: spacing(1), textAlign: 'center' },
-  card: { backgroundColor: colors.card, borderRadius: 16, padding: spacing(6) },
-  label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: spacing(1) },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: spacing(3),
-    paddingVertical: spacing(3),
-    fontSize: 16,
-    marginBottom: spacing(4),
-    backgroundColor: colors.bg,
-  },
-  error: { color: colors.danger, fontSize: 13, marginBottom: spacing(3) },
-  passwordRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing(4) },
-  eyeBtn: {
-    marginLeft: spacing(2), width: 48, height: 48, borderRadius: 10,
-    backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  eyeText: { fontSize: 20 },
-  button: { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: spacing(3.5), alignItems: 'center' },
-  buttonText: { color: colors.white, fontWeight: '700', fontSize: 16 },
-  footer: { color: 'rgba(255,255,255,0.6)', fontSize: 12, textAlign: 'center', marginTop: spacing(6) },
-});
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+    root: { flex: 1, backgroundColor: c.primary, justifyContent: 'center', padding: spacing(6) },
+    header: { alignItems: 'center', marginBottom: spacing(8) },
+    logo: { fontSize: 48, marginBottom: spacing(2) },
+    title: { fontSize: 26, fontWeight: '800', color: c.onPrimary },
+    subtitle: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: spacing(1), textAlign: 'center' },
+    card: { backgroundColor: c.card, borderRadius: 16, padding: spacing(6) },
+    label: { fontSize: 13, fontWeight: '600', color: c.text, marginBottom: spacing(1) },
+    input: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 10,
+      paddingHorizontal: spacing(3),
+      paddingVertical: spacing(3),
+      fontSize: 16,
+      marginBottom: spacing(4),
+      backgroundColor: c.bg,
+      color: c.text,
+    },
+    error: { color: c.danger, fontSize: 13, marginBottom: spacing(3) },
+    passwordRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing(4) },
+    eyeBtn: {
+      marginLeft: spacing(2), width: 48, height: 48, borderRadius: 10,
+      backgroundColor: c.bg, borderWidth: 1, borderColor: c.border,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    eyeText: { fontSize: 20 },
+    button: { backgroundColor: c.primary, borderRadius: 10, paddingVertical: spacing(3.5), alignItems: 'center' },
+    buttonText: { color: c.onPrimary, fontWeight: '700', fontSize: 16 },
+    footer: { color: 'rgba(255,255,255,0.6)', fontSize: 12, textAlign: 'center', marginTop: spacing(6) },
+  });
+}

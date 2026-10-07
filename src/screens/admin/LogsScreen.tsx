@@ -10,8 +10,9 @@ import {
   type StockLogRow,
 } from '@/services/logs';
 import { useSupabaseRealtime } from '@/services/useSupabaseRealtime';
+import { useStyles } from '@/services/settings';
 import { peso, formatDateTime } from '@/utils/format';
-import { colors, spacing } from '@/theme';
+import { colors, spacing, createStyleSheet } from '@/theme';
 
 type LogTab = 'sales' | 'stock' | 'attendance';
 
@@ -22,6 +23,7 @@ const TABS: { key: LogTab; label: string; icon: string }[] = [
 ];
 
 export function LogsScreen() {
+  const styles = useStyles(makeStyles);
   const [tab, setTab] = useState<LogTab>('sales');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -162,41 +164,45 @@ export function LogsScreen() {
 }
 
 function EmptyNote() {
+  const styles = useStyles(makeStyles);
   return <Text style={styles.empty}>No log entries yet.</Text>;
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+function makeStyles(c: import('@/theme').Palette) {
+  return createStyleSheet({
+  root: { flex: 1, backgroundColor: c.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 20, fontWeight: '800', color: colors.primary, padding: spacing(4), paddingBottom: spacing(2) },
+  title: { fontSize: 20, fontWeight: '800', color: c.primary, padding: spacing(4), paddingBottom: spacing(2) },
   tabsRow: { flexDirection: 'row', gap: spacing(2), paddingHorizontal: spacing(4), marginBottom: spacing(3) },
   tab: {
     flex: 1, alignItems: 'center', paddingVertical: spacing(2),
-    borderRadius: 10, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    borderRadius: 10, backgroundColor: c.card, borderWidth: 1, borderColor: c.border,
   },
-  tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  tabText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
-  tabTextActive: { color: colors.white, fontWeight: '700' },
+  tabActive: { backgroundColor: c.primary, borderColor: c.primary },
+  tabText: { fontSize: 13, fontWeight: '600', color: c.textMuted },
+  tabTextActive: { color: c.onPrimary, fontWeight: '700' },
   search: {
-    backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: c.card, borderRadius: 10, borderWidth: 1, borderColor: c.border,
     marginHorizontal: spacing(4), marginBottom: spacing(3),
     paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), fontSize: 14,
+    color: c.text,
   },
   list: { padding: spacing(4), paddingTop: 0, paddingBottom: spacing(8) },
   card: {
-    backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: c.card, borderRadius: 12, borderWidth: 1, borderColor: c.border,
     padding: spacing(3.5), marginBottom: spacing(2.5),
   },
   rowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  primaryText: { fontSize: 14, fontWeight: '700', color: colors.text, flex: 1 },
-  amount: { fontSize: 14, fontWeight: '800', color: colors.primary },
-  cancelled: { color: colors.danger, fontSize: 12 },
-  stockUp: { color: colors.success },
-  stockDown: { color: colors.danger },
-  subText: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  timeText: { fontSize: 11, color: colors.textMuted, marginTop: spacing(1) },
+  primaryText: { fontSize: 14, fontWeight: '700', color: c.text, flex: 1 },
+  amount: { fontSize: 14, fontWeight: '800', color: c.primary },
+  cancelled: { color: c.danger, fontSize: 12 },
+  stockUp: { color: c.success },
+  stockDown: { color: c.danger },
+  subText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+  timeText: { fontSize: 11, color: c.textMuted, marginTop: spacing(1) },
   badge: { fontSize: 11, fontWeight: '800', paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
-  badgeIn: { color: colors.success, backgroundColor: colors.successBg },
-  badgeOut: { color: colors.warning, backgroundColor: colors.warningBg },
-  empty: { textAlign: 'center', color: colors.textMuted, marginTop: spacing(6), fontSize: 14 },
-});
+  badgeIn: { color: c.success, backgroundColor: c.successBg },
+  badgeOut: { color: c.warning, backgroundColor: c.warningBg },
+  empty: { textAlign: 'center', color: c.textMuted, marginTop: spacing(6), fontSize: 14 },
+  });
+}

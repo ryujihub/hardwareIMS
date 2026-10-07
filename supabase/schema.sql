@@ -36,11 +36,21 @@ create table if not exists public.customers (
   created_at timestamptz not null default now()
 );
 
--- Single-row settings table
+-- Single-row settings table (admin-customizable branding, theme & rules)
 create table if not exists public.settings (
-  id           int primary key default 1 check (id = 1),
-  delivery_fee numeric(10,2) not null default 50,
-  updated_at   timestamptz not null default now()
+  id                  int primary key default 1 check (id = 1),
+  delivery_fee        numeric(10,2) not null default 50,
+  store_name          text    not null default 'Metro Manila Hills',
+  tagline             text    not null default 'Construction Supply & Trading — Inventory System',
+  currency_symbol     text    not null default '₱',
+  receipt_footer      text    not null default 'Salamat po! 🙏',
+  primary_color       text    not null default '#1e3a5f',
+  accent_color        text    not null default '#f59e0b',
+  dark_mode           boolean not null default false,
+  payment_methods     text[]  not null default '{cash,card,gcash}',
+  low_stock_threshold integer not null default 5,
+  categories          text[]  not null default '{}',
+  updated_at          timestamptz not null default now()
 );
 
 create table if not exists public.orders (
@@ -287,6 +297,16 @@ insert into public.products (name, sku, category, price, stock, reorder_point) v
   ('Gravel (per cubic)', 'GRV-CU-01',  'Aggregates', 1500.00,  18,   5),
   ('Steel Bar 12mm',     'STL-12-001', 'Steel',       210.00,  90,  30)
 on conflict (sku) do nothing;
+
+-- Seed the customizable category list from the products above
+update public.settings s
+set categories = sub.cats
+from (
+  select array_agg(distinct category order by category) as cats
+  from public.products
+  where category is not null and category <> ''
+) sub
+where s.id = 1 and (s.categories is null or s.categories = '{}');
 
 -- ---------- 7. DAILY SALES VIEW (reports) ----------
 create or replace view public.daily_sales as

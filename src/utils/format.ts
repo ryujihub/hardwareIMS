@@ -1,5 +1,16 @@
-// Peso formatter — manual implementation so it works identically on
+// Currency formatting — manual implementation so it works identically on
 // Hermes (Android/iOS) and web, regardless of Intl availability.
+// The symbol is customizable: SettingsProvider calls setCurrencySymbol().
+let currencySymbol = '\u20B1'; // peso sign (default)
+
+export function setCurrencySymbol(symbol: string): void {
+  currencySymbol = symbol && symbol.trim() ? symbol.trim() : '\u20B1';
+}
+
+export function getCurrencySymbol(): string {
+  return currencySymbol;
+}
+
 export function peso(n: number): string {
   const safe = Number.isFinite(n) ? n : 0;
   const fixed = safe.toFixed(2);
@@ -7,7 +18,7 @@ export function peso(n: number): string {
   const signed = intPart.startsWith('-') ? '-' : '';
   const digits = signed ? intPart.slice(1) : intPart;
   const withCommas = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${signed}\u20B1${withCommas}.${decPart}`;
+  return `${signed}${currencySymbol}${withCommas}.${decPart}`;
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
@@ -32,4 +43,13 @@ export function isSameLocalDay(iso: string, d: Date = new Date()): boolean {
     then.getMonth() === d.getMonth() &&
     then.getDate() === d.getDate()
   );
+}
+
+// Escape untrusted text before embedding it in printable HTML
+export function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
