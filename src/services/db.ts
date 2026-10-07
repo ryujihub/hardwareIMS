@@ -102,6 +102,36 @@ export async function adjustStock(productId: string, delta: number, reason: stri
   return bulkAdjustStock([productId], delta, reason, staffId);
 }
 
+// Supabase docs: React Native Blob/File/FormData don't work.
+// Use ArrayBuffer decoded from base64 string instead.
+export async function uploadProductImage(base64Data: string, fileExt: string): Promise<{ url: string | null; error: string | null }> {
+  try {
+    const fileName = `${Date.now()}_${Math.floor(Math.random() * 1000)}.${fileExt}`;
+    
+    // Decode base64 → binary string → Uint8Array → ArrayBuffer
+    const binaryString = atob(base64Data);
+    const bytes = Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
+    const arrayBuffer = bytes.buffer;
+    
+    const { error } = await supabase.storage
+      .from('product-images')
+      .upload(fileName, arrayBuffer, {
+        upsert: false,
+        contentType: `image/${fileExt === 'jpg' ? 'jpeg' : fileExt}`,
+      });
+      
+    if (error) throw error;
+    
+    const { data: publicData } = supabase.storage
+      .from('product-images')
+      .getPublicUrl(fileName);
+      
+    return { url: publicData.publicUrl, error: null };
+  } catch (err) {
+    return { url: null, error: errorMessage(err) };
+  }
+}
+
 // ---------- Settings ----------
 
 // Columns written by saveSettings — guarded so a missing customization

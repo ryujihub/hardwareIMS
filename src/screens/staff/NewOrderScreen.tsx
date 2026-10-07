@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '@/services/auth';
 import { fetchProducts, findProductByBarcode, placeOrder } from '@/services/db';
 import { useSettings, useStyles } from '@/services/settings';
@@ -211,12 +211,13 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
           const low = isLowStock(p, settings.low_stock_threshold);
           const inCart = cart.find((i) => i.productId === p.id);
           return (
-            <View key={p.id} style={styles.productRow}>
-              {p.image_url ? (
+            <View key={p.id} style={styles.productRow}>                {p.image_url ? (
                 <View style={styles.thumbWrapper}>
-                  <img src={p.image_url} alt={p.name} style={{ width: 40, height: 40, borderRadius: 6, objectFit: 'cover' }} />
+                  <Image source={{ uri: p.image_url }} style={{ width: 40, height: 40, borderRadius: 6 }} onError={(e) => console.warn('Image failed:', p.image_url, e.nativeEvent.error)} />
                 </View>
-              ) : null}
+              ) : (
+                <View style={[styles.thumbWrapper, { backgroundColor: colors.bg }]} />
+              )}
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName}>{p.name}</Text>
                 <Text style={[styles.productMeta, low && { color: colors.danger }]}>
@@ -246,9 +247,11 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
               <View key={i.productId} style={styles.cartRow}>
                 {i.image_url ? (
                   <View style={[styles.thumbWrapper, { marginRight: spacing(2) }]}>
-                    <img src={i.image_url} alt={i.name} style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover' }} />
+                    <Image source={{ uri: i.image_url }} style={{ width: 36, height: 36, borderRadius: 6 }} onError={(e) => console.warn('Image failed:', i.image_url, e.nativeEvent.error)} />
                   </View>
-                ) : null}
+                ) : (
+                  <View style={[styles.thumbWrapper, { marginRight: spacing(2), backgroundColor: colors.bg }]} />
+                )}
                 <View style={{ flex: 1 }}>
                   <Text style={styles.productName}>{i.name}</Text>
                   <Text style={styles.productMeta}>

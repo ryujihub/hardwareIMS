@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Image } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '@/services/auth';
-import { adjustStock, bulkAdjustStock, bulkDeleteProducts, fetchProducts, upsertProduct } from '@/services/db';
+import { adjustStock, bulkAdjustStock, bulkDeleteProducts, fetchProducts, upsertProduct, uploadProductImage } from '@/services/db';
 import { useSettings, useStyles } from '@/services/settings';
 import { useSupabaseRealtime } from '@/services/useSupabaseRealtime';
 import { peso } from '@/utils/format';
 import { isLowStock } from '@/utils/stock';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, withAlpha, createStyleSheet } from '@/theme';
 import type { Product } from '@/types';
 
@@ -33,6 +36,8 @@ export function StockScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortAsc, setSortAsc] = useState(true);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [categoryModalVisible, setCategoryModalVisible] = useState(false);
   const realtimeChanges = useSupabaseRealtime(['products']);
 
   const toggleSelect = (id: string) => {
@@ -90,14 +95,14 @@ export function StockScreen() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const matched = q
-      ? products.filter(
-          (p) =>
-            p.name.toLowerCase().includes(q) ||
-            (p.sku ?? '').toLowerCase().includes(q) ||
-            (p.category ?? '').toLowerCase().includes(q)
-        )
-      : products;
+    const matched = products.filter((p) => {
+      if (categoryFilter && p.category?.toLowerCase() !== categoryFilter.toLowerCase()) return false;
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        (p.sku ?? '').toLowerCase().includes(q)
+      );
+    });
 
     const dir = sortAsc ? 1 : -1;
     const sorted = [...matched];
@@ -117,7 +122,7 @@ export function StockScreen() {
       }
     });
     return sorted;
-  }, [products, query, sortKey, sortAsc]);
+  }, [products, query, sortKey, sortAsc, categoryFilter]);
 
   function onSortPress(key: SortKey) {
     if (key === sortKey) {
@@ -151,13 +156,41 @@ export function StockScreen() {
         <Text style={styles.offline}>📴 Offline — cached stock levels</Text>
       ) : null}
 
-      <TextInput
-        style={styles.search}
-        value={query}
-        onChangeText={setQuery}
-        placeholder="🔍 Search name, SKU, category…"
-        placeholderTextColor={colors.textMuted}
-      />
+      <View style={styles.searchRow}>
+        <TextInput
+          style={styles.search}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="🔍 Search name, SKU…"
+          placeholderTextColor={colors.textMuted}
+        />
+        <Pressable style={styles.categoryDropdown} onPress={() => setCategoryModalVisible(true)}>
+          <Text style={styles.categoryLabel}>{categoryFilter || 'All Categories'}</Text>
+          <Ionicons name={categoryFilter ? 'chevron-down' : 'chevron-up'} size={18} color={colors.textMuted} />
+        </Pressable>
+        <Modal visible={categoryModalVisible} animationType="slide" transparent>
+          <View style={styles.categoryModalBackdrop}>
+            <View style={styles.categoryModalCard}>
+              <Text style={styles.categoryModalTitle}>Filter by Category</Text>
+              <ScrollView style={styles.categoryList}>
+                <Pressable style={styles.categoryOption} onPress={() => { setCategoryFilter(null); setCategoryModalVisible(false); }}>
+                  <Text style={styles.categoryOptionText}>All Categories</Text>
+                  {categoryFilter === null && <Ionicons name="checkmark" size={18} color={colors.primary} />}
+                </Pressable>
+                {settings.categories.map((cat) => (
+                  <Pressable key={cat} style={styles.categoryOption} onPress={() => { setCategoryFilter(cat); setCategoryModalVisible(false); }}>
+                    <Text style={styles.categoryOptionText}>{cat}</Text>
+                    {categoryFilter === cat && <Ionicons name="checkmark" size={18} color={colors.primary} />}
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <Pressable style={styles.categoryModalClose} onPress={() => setCategoryModalVisible(false)}>
+                <Text style={styles.categoryModalCloseText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+      </View>
 
       {/* Sort chips — tap active chip to flip direction */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sortRow} contentContainerStyle={styles.sortRowContent}>
@@ -212,8 +245,7 @@ export function StockScreen() {
               <View style={styles.cardContent}>
                 {p.image_url ? (
                   <View style={styles.thumbWrapper}>
-                    {/* Standard HTML img for RNW web support */}
-                    <img src={p.image_url} alt={p.name} style={{ width: 48, height: 48, borderRadius: 8, objectFit: 'cover' }} />
+                    <Image source={{ uri: p.image_url }} style={{ width: 48, height: 48, borderRadius: 8 }} onError={(e) => console.warn('Image failed:', p.image_url, e.nativeEvent.error)} />
                   </View>
                 ) : (
                   <View style={styles.thumbPlaceholder}>
@@ -284,6 +316,8 @@ function EditProductModal({
   const [adjust, setAdjust] = useState('0');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [lastUploadError, setLastUploadError] = useState<string | null>(null);
 
   // Category suggestions: the admin's list plus anything already on this product
   const categorySuggestions = useMemo(() => {
@@ -291,6 +325,42 @@ function EditProductModal({
     if (product?.category) set.add(product.category);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [settings.categories, product]);
+
+  async function pickImage() {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images' as const,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    
+    if (!result.canceled && result.assets?.[0]) {
+      setImageUploading(true);
+      setLastUploadError(null);
+      try {
+        const asset = result.assets[0];
+        const ext = asset.mimeType?.split('/')[1]?.toLowerCase() || 'jpg';
+        
+        // Read image as base64, decode to ArrayBuffer for Supabase (RN Blob/FormData doesn't work)
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+        
+        const { url, error: uploadErr } = await uploadProductImage(base64, ext) as { url: string | null; error: string | null };
+        if (uploadErr) {
+          setLastUploadError(uploadErr);
+          setError(uploadErr);
+        } else if (url) {
+          setImageUrl(url);
+          setLastUploadError(null);
+          setError(null);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLastUploadError(msg);
+        setError(msg);
+      }
+      setImageUploading(false);
+    }
+  }
 
   useEffect(() => {
     if (product) {
@@ -360,8 +430,16 @@ function EditProductModal({
           <Text style={styles.label}>Name</Text>
           <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Cement 40kg" />
 
-          <Text style={styles.label}>Image URL (optional)</Text>
-          <TextInput style={styles.input} value={imageUrl} onChangeText={setImageUrl} placeholder="https://example.com/item.jpg" />
+          <View style={[styles.row, { alignItems: 'flex-end', marginBottom: spacing(3) }]}>
+            <View style={{ flex: 1, marginRight: spacing(2) }}>
+              <Text style={styles.label}>Image URL (optional)</Text>
+              <TextInput style={[styles.input, { marginBottom: 0 }]} value={imageUrl} onChangeText={setImageUrl} placeholder="https://example.com/item.jpg" />
+            </View>
+            <Pressable style={[styles.uploadBtn, imageUploading && { opacity: 0.6 }]} onPress={() => void pickImage()} disabled={busy || imageUploading}>
+              <Text style={styles.uploadBtnText}>{imageUploading ? 'Uploading…' : lastUploadError ? 'Retry' : 'Upload'}</Text>
+            </Pressable>
+            {lastUploadError != null ? <Text style={[styles.error, { fontSize: 11 }]} numberOfLines={2}>{String(lastUploadError)}</Text> : null}
+          </View>
 
           <View style={styles.row}>
             <View style={{ flex: 1, marginRight: spacing(2) }}>
@@ -442,10 +520,23 @@ function makeStyles(c: import('@/theme').Palette) {
     addButton: { backgroundColor: c.primary, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
     addText: { color: c.onPrimary, fontWeight: '700' },
     offline: { color: c.warning, fontSize: 12, fontWeight: '600', paddingHorizontal: spacing(4) },
+    searchRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing(2),
+      marginHorizontal: spacing(4), marginTop: spacing(2),
+    },
     search: {
       backgroundColor: c.card, borderRadius: 10, borderWidth: 1, borderColor: c.border,
-      marginHorizontal: spacing(4), marginTop: spacing(2), paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15,
+      flex: 1, paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15,
       color: c.text,
+    },
+    categoryDropdown: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing(1),
+      backgroundColor: c.card, borderRadius: 10, borderWidth: 1, borderColor: c.border,
+      paddingHorizontal: spacing(3), paddingVertical: spacing(2.5),
+    },
+    categoryLabel: {
+      fontSize: 14, color: c.text, fontWeight: '600',
+      maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
     },
     sortRow: { marginTop: spacing(2), flexGrow: 0 },
     sortRowContent: { paddingHorizontal: spacing(4), gap: spacing(2) },
@@ -470,6 +561,14 @@ function makeStyles(c: import('@/theme').Palette) {
     bulkDanger: { backgroundColor: c.danger, borderColor: c.danger },
     bulkClear: { fontSize: 12, color: c.textMuted },
     hintText: { fontSize: 12, color: c.textMuted, textAlign: 'center', marginTop: spacing(2) },
+    categoryModalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: spacing(4) },
+    categoryModalCard: { backgroundColor: c.card, borderRadius: 16, padding: spacing(4), maxHeight: '60%' },
+    categoryModalTitle: { fontSize: 16, fontWeight: '700', color: c.text, marginBottom: spacing(3) },
+    categoryList: { maxHeight: 300 },
+    categoryOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing(2.5), borderBottomWidth: 1, borderBottomColor: c.border },
+    categoryOptionText: { fontSize: 15, color: c.text, paddingHorizontal: spacing(2) },
+    categoryModalClose: { marginTop: spacing(3), backgroundColor: c.primary, borderRadius: 10, paddingVertical: spacing(2.5), alignItems: 'center' },
+    categoryModalCloseText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
     name: { fontSize: 16, fontWeight: '700', color: c.text },
     meta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
     badgeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing(2) },
@@ -495,5 +594,7 @@ function makeStyles(c: import('@/theme').Palette) {
     btnGhostText: { color: c.textMuted, fontWeight: '700' },
     btnPrimary: { backgroundColor: c.primary },
     btnPrimaryText: { color: c.onPrimary, fontWeight: '700' },
+    uploadBtn: { backgroundColor: c.primaryLight, paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), borderRadius: 8, justifyContent: 'center' },
+    uploadBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 13 },
   });
 }
