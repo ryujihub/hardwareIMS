@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '@/services/auth';
 import { fetchProducts, findProductByBarcode, placeOrder } from '@/services/db';
@@ -23,6 +23,10 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
   const { profile } = useAuth();
   const { settings } = useSettings();
   const styles = useStyles(makeStyles);
+  const scrollView = useRef<ScrollView>(null);
+  const rowLayouts = useRef<Record<string, { y: number; h: number }>>({});
+  const scrollOffset = useRef(0);
+  const viewportHeight = useRef(0);
   const [products, setProducts] = useState<Product[]>([]);
   const [query, setQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -33,6 +37,7 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
   const [busy, setBusy] = useState(false);
   const [offline, setOffline] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [lastTouchedProductId, setLastTouchedProductId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetchProducts();
@@ -109,6 +114,8 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
       }
       return [...prev, { productId: p.id, name: p.name, price: Number(p.price), quantity: 1, image_url: p.image_url }];
     });
+    // After the next render, scroll the touched product row into view.
+    setLastTouchedProductId(p.id);
   }
 
   function changeQty(productId: string, delta: number) {
@@ -118,6 +125,25 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
         .filter((i) => i.quantity > 0)
     );
   }
+
+  // After each render, scroll the last-touched product row into view if it's off-screen.
+  useEffect(() => {
+    if (lastTouchedProductId == null) return;
+    const layout = rowLayouts.current[lastTouchedProductId];
+    if (!layout) return;
+    const { y, h } = layout;
+    if (h <= 0 || viewportHeight.current <= 0) return;
+
+    const offsetY = scrollOffset.current;
+    // If the row is fully within the viewport, skip.
+    if (y >= offsetY && y + h <= offsetY + viewportHeight.current) {
+      return;
+    }
+
+    // Otherwise scroll the row's top into view.
+    const target = Math.max(0, y);
+    scrollView.current?.scrollTo({ animated: true, y: target });
+  }, [lastTouchedProductId]);
 
   async function completeOrder() {
     if (cart.length === 0) {
@@ -187,7 +213,17 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
         {offline ? <Text style={styles.offlineTag}>OFFLINE</Text> : null}
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollView}
+        contentContainerStyle={styles.content}
+        scrollEventThrottle={16}
+        onScroll={(e) => {
+          scrollOffset.current = e.nativeEvent.contentOffset.y;
+        }}
+        onLayout={(e) => {
+          viewportHeight.current = e.nativeEvent.layout.height;
+        }}
+      >
         <Text style={styles.label}>Customer name *</Text>
         <TextInput style={styles.input} value={customerName} onChangeText={setCustomerName} placeholder="e.g. Juan Dela Cruz" />
 
@@ -211,30 +247,17 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
           const low = isLowStock(p, settings.low_stock_threshold);
           const inCart = cart.find((i) => i.productId === p.id);
           return (
-            <View key={p.id} style={styles.productRow}>                {p.image_url ? (
-                <View style={styles.thumbWrapper}>
-                  <Image source={{ uri: p.image_url }} style={{ width: 40, height: 40, borderRadius: 6 }} onError={(e) => console.warn('Image failed:', p.image_url, e.nativeEvent.error)} />
-                </View>
-              ) : (
-                <View style={[styles.thumbWrapper, { backgroundColor: colors.bg }]} />
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.productName}>{p.name}</Text>
-                <Text style={[styles.productMeta, low && { color: colors.danger }]}>
-                  {p.stock === 0 ? 'Out of stock' : `In stock: ${p.stock}`} · {peso(Number(p.price))}
-                </Text>
-              </View>
-              {inCart ? (
-                <Text style={styles.inCart}>×{inCart.quantity}</Text>
-              ) : null}
-              <Pressable
-                style={[styles.addBtn, p.stock === 0 && { opacity: 0.4 }]}
-                onPress={() => addToCart(p)}
-                disabled={p.stock === 0}
-              >
-                <Text style={styles.addBtnText}>+ Add</Text>
-              </Pressable>
-            </View>
+            <ProductRow
+              key={p.id}
+              product={p}
+              low={low}
+              inCart={inCart}
+              onAdd={() => addToCart(p)}
+              onLayout={(y: number, h: number) => {
+                rowLayouts.current[p.id] = { y, h };
+              }}
+              styles={styles}
+            />
           );
         })}
         {filtered.length === 0 ? <Text style={styles.empty}>No products found.</Text> : null}
@@ -319,6 +342,58 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
         onScanned={(code) => void handleBarcode(code)}
         onClose={() => setScanning(false)}
       />
+    </View>
+  );
+}
+
+function ProductRow({
+  product,
+  low,
+  inCart,
+  onAdd,
+  onLayout,
+  styles,
+}: {
+  product: Product;
+  low: boolean;
+  inCart: CartItem | undefined;
+  onAdd: () => void;
+  onLayout: (y: number, h: number) => void;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  return (
+    <View
+      style={styles.productRow}
+      onLayout={(e) => {
+        const { y, height } = e.nativeEvent.layout;
+        onLayout(y, height);
+      }}
+    >
+      {product.image_url ? (
+        <View style={styles.thumbWrapper}>
+          <Image
+            source={{ uri: product.image_url }}
+            style={{ width: 40, height: 40, borderRadius: 6 }}
+            onError={(e) => console.warn('Image failed:', product.image_url, e.nativeEvent.error)}
+          />
+        </View>
+      ) : (
+        <View style={[styles.thumbWrapper, { backgroundColor: colors.bg }]} />
+      )}
+      <View style={{ flex: 1 }}>
+        <Text style={styles.productName}>{product.name}</Text>
+        <Text style={[styles.productMeta, low && { color: colors.danger }]}>
+          {product.stock === 0 ? 'Out of stock' : `In stock: ${product.stock}`} · {peso(Number(product.price))}
+        </Text>
+      </View>
+      {inCart ? <Text style={styles.inCart}>×{inCart.quantity}</Text> : null}
+      <Pressable
+        style={[styles.addBtn, product.stock === 0 && { opacity: 0.4 }]}
+        onPress={onAdd}
+        disabled={product.stock === 0}
+      >
+        <Text style={styles.addBtnText}>+ Add</Text>
+      </Pressable>
     </View>
   );
 }

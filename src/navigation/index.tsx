@@ -4,11 +4,14 @@ import { useAuth } from '@/services/auth';
 import { useStyles } from '@/services/settings';
 import { colors, spacing, createStyleSheet } from '@/theme';
 import { HomeScreen } from '@/screens/staff/HomeScreen';
-import { NewOrderScreen } from '@/screens/staff/NewOrderScreen';
+import { ProductSelectionScreen } from '@/screens/staff/ProductSelectionScreen';
+import { CheckoutScreen } from '@/screens/staff/CheckoutScreen';
 import { StockScreen } from '@/screens/staff/StockScreen';
 import { AdminScreen } from '@/screens/admin/AdminScreen';
 import { LogsScreen } from '@/screens/admin/LogsScreen';
 import { ReceiptScreen } from '@/screens/staff/ReceiptScreen';
+import { NewOrderProvider } from '@/hooks/useNewOrder';
+import { setNewOrderNav } from './useNewOrderNav';
 import type { Order, OrderItem } from '@/types';
 
 const TABS = [
@@ -21,6 +24,8 @@ const TABS = [
 
 export type TabKey = (typeof TABS)[number]['key'];
 
+type NewOrderScreen = 'selection' | 'checkout';
+
 export function MainTabs() {
   const { profile } = useAuth();
   const styles = useStyles(makeStyles);
@@ -31,6 +36,7 @@ export function MainTabs() {
 
   const [rawTab, setTab] = useState<TabKey>('home');
   const [receipt, setReceipt] = useState<{ order: Order; items?: OrderItem[] } | null>(null);
+  const [newOrderScreen, setNewOrderScreen] = useState<NewOrderScreen>('selection');
 
   // Guard against a stale tab if role changed mid-session
   const tab: TabKey = visibleTabs.some((t) => t.key === rawTab) ? rawTab : 'home';
@@ -40,6 +46,18 @@ export function MainTabs() {
     return <ReceiptScreen order={receipt.order} items={receipt.items} onClose={() => setReceipt(null)} />;
   }
 
+  // Keep the shared navigation singleton in sync so the screens can navigate.
+  setNewOrderNav({
+    screen: newOrderScreen,
+    navigate: (target: NewOrderScreen) => {
+      setNewOrderScreen(target);
+    },
+    goBack: () => {
+      setNewOrderScreen('selection');
+    },
+    canGoBack: newOrderScreen === 'checkout',
+  });
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={{ flex: 1 }}>
@@ -47,9 +65,13 @@ export function MainTabs() {
           <HomeScreen onNewOrder={() => setTab('new')} onGoStock={() => setTab('stock')} />
         )}
         {tab === 'new' && (
-          <NewOrderScreen
-            onOrderPlaced={(order, items) => setReceipt({ order, items })}
-          />
+          <NewOrderProvider>
+            {newOrderScreen === 'checkout' ? (
+              <CheckoutScreen />
+            ) : (
+              <ProductSelectionScreen />
+            )}
+          </NewOrderProvider>
         )}
         {tab === 'stock' && <StockScreen />}
         {tab === 'logs' && <LogsScreen />}
