@@ -172,11 +172,14 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
       return;
     }
 
+    const actingStaffId = profile?.id ?? null;
+    const actingStaffName = profile?.name ?? 'Demo Staff';
+
     const order: Order = {
       id: result.offline ? result.queued.localId : result.orderId,
       customer_name: customerName.trim(),
       customer_phone: customerPhone.trim() || null,
-      staff_id: profile?.id ?? null,
+      staff_id: result.offline ? actingStaffId : profile?.id ?? null,
       subtotal,
       delivery_fee: feeNum,
       total,
@@ -201,7 +204,8 @@ export function NewOrderScreen({ onOrderPlaced }: Props) {
     setCustomerPhone('');
 
     if (result.offline) {
-      Alert.alert('Saved offline 📴', 'No connection right now — the order is queued and will sync automatically.');
+      const who = actingStaffName ?? 'Demo Staff';
+      Alert.alert('Saved offline 📴', `No connection right now — ${who} order is queued and will sync automatically.`);
     }
     onOrderPlaced?.(order, items);
   }

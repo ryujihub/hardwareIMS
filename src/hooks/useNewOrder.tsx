@@ -184,6 +184,9 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
     }
 
     setState((prev) => ({ ...prev, busy: true }));
+    const actingStaffId = profile?.id ?? null;
+    const actingStaffName = profile?.name ?? 'Demo Staff';
+
     const result = await placeOrder({
       customerName: state.customerName.trim(),
       customerPhone: state.customerPhone.trim() || null,
@@ -204,7 +207,7 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
       id: result.offline ? result.queued.localId : result.orderId,
       customer_name: state.customerName.trim(),
       customer_phone: state.customerPhone.trim() || null,
-      staff_id: profile?.id ?? null,
+      staff_id: result.offline ? (actingStaffId ?? null) : (profile?.id ?? null),
       subtotal,
       delivery_fee: feeNum,
       total,
@@ -232,10 +235,11 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
     }));
 
     if (result.offline) {
+      const who = actingStaffName ?? 'Demo Staff';
       if (Platform.OS === 'web') {
-        alert('Saved offline 📴 — the order is queued and will sync automatically.');
+        alert(`Saved offline 📴 — ${who} order queued and will sync automatically.`);
       } else {
-        Alert.alert('Saved offline 📴', 'No connection right now — the order is queued and will sync automatically.');
+        Alert.alert('Saved offline 📴', `No connection right now — ${who} order is queued and will sync automatically.`);
       }
     }
     onOrderPlaced?.(order, items);

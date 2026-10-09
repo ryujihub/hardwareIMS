@@ -1,6 +1,52 @@
 import { supabase } from './supabase';
-import { cacheGet, cacheSet, enqueueOrder, getQueue, replaceQueue, CACHE_KEYS } from '@/store/cache';
+import { cacheGet, cacheSet, getQueue, replaceQueue, CACHE_KEYS } from '@/store/cache';
+import {
+  localProducts,
+  localProductById,
+  localProductByBarcode,
+  bulkUpsertLocalProducts,
+  localSettings,
+  upsertLocalSettings,
+  pullFromSupabase,
+  placeLocalOrder,
+  markLocalOrderSynced,
+  enqueueLocalMutation,
+  removeLocalMutation,
+  getDb,
+  syncBunker,
+} from './localdb';
 import { DEFAULT_SETTINGS, type CartItem, type Order, type OrderItem, type OrderStatus, type PaymentMethod, type PaymentStatus, type Product, type Profile, type QueuedOrder, type Settings } from '@/types';
+
+// Deterministic fake ID generator for demo/kiosk offline staffer identity.
+let demoStaffId: string | null = null;
+export function getDemoStaffId(): string {
+  if (demoStaffId) return demoStaffId;
+  demoStaffId = `demo_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  try {
+    cacheSet('demo.staffId', demoStaffId);
+  } catch {}
+  return demoStaffId;
+}
+
+export async function getActingStaffId(): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.getUser();
+    if (data.user) return data.user.id;
+  } catch {}
+  // No real session — use the demo/local staffer identity for offline work.
+  return getDemoStaffId();
+}
+
+export async function getActingStaffName(): Promise<string> {
+  try {
+    const { data } = await supabase.auth.getUser();
+    if (data.user) {
+      const { data: p } = await supabase.from('profiles').select('name').eq('id', data.user.id).single();
+      if (p) return p.name;
+    }
+  } catch {}
+  return 'Demo Staff';
+}
 
 export interface Fetched<T> {
   data: T;
@@ -28,19 +74,45 @@ function isNetworkError(err: unknown): boolean {
 // ---------- Products ----------
 
 export async function fetchProducts(): Promise<Fetched<Product[]>> {
+  // Local-first: always read from the local SQLite catalog so the app is usable offline.
+  const local = localProducts();
+  if (local.length > 0) {
+    // Best-effort background refresh from Supabase into the local DB when online.
+    void pullFromSupabase();
+    return { data: local, offline: false };
+  }
+
+  // No local catalog yet — try Supabase and seed the local DB so future opens are offline.
+  try {
+    const { data, error } = await supabase.from('products').select('*').order('name');
+    if (error) throw error;
+    const products = (data ?? []) as Product[];
+    bulkUpsertLocalProducts(products);
+    return { data: products, offline: false };
+  } catch {
+    // Nothing online and nothing cached locally yet — return empty.
+    return { data: [], offline: true };
+  }
+}
+
+// Keep a Supabase-only barcode lookup for products that may not be in the local catalog yet.
+export async function findProductByBarcode(barcode: string): Promise<Product | null> {
+  // Check local catalog first (fast, offline).
+  const local = localProductByBarcode(barcode);
+  if (local) return local;
+
   try {
     const { data, error } = await supabase
       .from('products')
       .select('*')
-      .order('name');
-    if (error) throw error;
-    const products = (data ?? []) as Product[];
-    await cacheSet(CACHE_KEYS.products, products);
-    return { data: products, offline: false };
+      .eq('barcode', barcode)
+      .maybeSingle();
+    if (error || !data) return null;
+    const product = data as Product;
+    bulkUpsertLocalProducts([product]);
+    return product;
   } catch {
-    // Network or permission failure — serve the last cached copy
-    const cached = (await cacheGet<Product[]>(CACHE_KEYS.products)) ?? [];
-    return { data: cached, offline: true };
+    return null;
   }
 }
 
@@ -151,17 +223,21 @@ const SETTINGS_COLUMNS = [
 ] as const;
 
 export async function fetchSettings(): Promise<Fetched<Settings>> {
+  // Local-first: read from the local SQLite settings row (seeded at first run).
+  const local = localSettings();
+  if (local.store_name) {
+    void pullFromSupabase();
+    return { data: local, offline: false };
+  }
+
   try {
-    // select('*') is resilient: if the customization migration hasn't run,
-    // Postgres just returns delivery_fee and the rest falls back to defaults.
     const { data, error } = await supabase.from('settings').select('*').eq('id', 1).single();
     if (error) throw error;
     const settings = normalizeSettings(data as Partial<Settings> | null);
-    await cacheSet(CACHE_KEYS.settings, settings);
+    upsertLocalSettings(settings);
     return { data: settings, offline: false };
   } catch {
-    const cached = await cacheGet<Settings>(CACHE_KEYS.settings);
-    return { data: normalizeSettings(cached), offline: true };
+    return { data: local, offline: true };
   }
 }
 
@@ -227,15 +303,53 @@ export type PlaceOrderResult =
   | { ok: true; offline: true; queued: QueuedOrder }
   | { ok: false; error: string };
 
-// Creates an order online; falls back to the offline queue when network fails.
+// Creates an order. Writes to the local SQLite DB first (so the order exists
+// even when there is no internet), then attempts to sync to Supabase.
+// When that fails with a network error the order stays local and is synced later.
 export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+  // 1) Local truth: write the order + items + local stock decrement.
+  const actingStaff = await getActingStaffId();
+  const actingStaffName = await getActingStaffName();
+
+  // 1) Local truth: write the order + items + local stock decrement.
+  const { order: localOrder, items: _localItems } = placeLocalOrder({
+    customerName: input.customerName,
+    customerPhone: input.customerPhone,
+    staffId: actingStaff,
+    staffName: actingStaffName,
+    items: input.items,
+    paymentMethod: input.paymentMethod,
+    subtotal: input.subtotal,
+    deliveryFee: input.deliveryFee,
+    total: input.total,
+  });
+
+  // 2) Enqueue a sync mutation (durable across app restarts via SQLite queue).
+  enqueueLocalMutation({
+    localId: localOrder.id,
+    createdAt: localOrder.created_at,
+    payload: {
+      customer_name: input.customerName,
+      customer_phone: input.customerPhone,
+      items: input.items,
+      payment_method: input.paymentMethod,
+      subtotal: input.subtotal,
+      delivery_fee: input.deliveryFee,
+      total: input.total,
+    },
+  });
+
+  // 3) Attempt sync to Supabase immediately.
   try {
-    const { data: order, error: orderError } = await supabase
+    const me = await supabase.auth.getUser();
+    const staffId = me.data?.user?.id ?? null;
+
+    const { data: supOrder, error: orderError } = await supabase
       .from('orders')
       .insert({
         customer_name: input.customerName,
         customer_phone: input.customerPhone,
-        staff_id: (await supabase.auth.getUser()).data.user?.id ?? null,
+        staff_id: staffId,
         subtotal: input.subtotal,
         delivery_fee: input.deliveryFee,
         total: input.total,
@@ -246,10 +360,10 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       .select('id')
       .single();
     if (orderError) throw orderError;
-    if (!order) throw new Error('No order returned');
+    if (!supOrder) throw new Error('No order returned');
 
     const rows = input.items.map((item) => ({
-      order_id: order.id as string,
+      order_id: supOrder.id as string,
       product_id: item.productId || null,
       name: item.name,
       price: item.price,
@@ -258,53 +372,53 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     const { error: itemsError } = await supabase.from('order_items').insert(rows);
     if (itemsError) throw itemsError;
 
-    return { ok: true, offline: false, orderId: order.id };
-  // Only queue when the failure looks like a network problem — otherwise a
-  // validation/permission error would silently become an un-syncable order.
+    // Synced — clear the queued mutation.
+    removeLocalMutation(localOrder.id);
+    return { ok: true, offline: false, orderId: supOrder.id };
   } catch (err) {
     if (!isNetworkError(err)) {
       return { ok: false, error: errorMessage(err) };
     }
-    // Offline path: persist locally and sync later
-    const queued: QueuedOrder = {
-      localId: `local_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
-      createdAt: new Date().toISOString(),
-      payload: {
-        customer_name: input.customerName,
-        customer_phone: input.customerPhone,
-        items: input.items,
-        payment_method: input.paymentMethod,
-        subtotal: input.subtotal,
-        delivery_fee: input.deliveryFee,
-        total: input.total,
-      },
-    };
-    await enqueueOrder(queued);
-    return { ok: true, offline: true, queued };
+    // Network failed — the order already exists locally. Sync later.
+    return { ok: true, offline: true, queued: toQueuedOrder(localOrder) };
   }
 }
 
-// Pushes queued orders to Supabase. Called on reconnect / app focus.
+function toQueuedOrder(localOrder: Order): QueuedOrder {
+  const database = getDb();
+  const itemRows = database.getAllSync<{
+    product_id: string | null;
+    name: string;
+    price: number;
+    quantity: number;
+  }>(`select product_id, name, price, quantity from local_order_items where order_id = ?`, [
+    localOrder.id,
+  ]);
+  return {
+    localId: localOrder.id,
+    createdAt: localOrder.created_at,
+    payload: {
+      customer_name: localOrder.customer_name,
+      customer_phone: localOrder.customer_phone,
+      items: itemRows.map((r: { product_id: string | null; name: string; price: number; quantity: number }, idx: number) => ({
+        productId: r.product_id ?? `unknown-${idx}`,
+        name: r.name,
+        price: r.price,
+        quantity: r.quantity,
+      })),
+      payment_method: localOrder.payment_method,
+      subtotal: localOrder.subtotal,
+      delivery_fee: localOrder.delivery_fee,
+      total: localOrder.total,
+    },
+  };
+}
+
+// Pushes queued local orders to Supabase. Called on reconnect / app focus.
 // Returns how many orders were synced.
 export async function syncQueuedOrders(): Promise<number> {
-  const queue = await getQueue();
-  if (queue.length === 0) return 0;
-
-  let synced = 0;
-  const failed: QueuedOrder[] = [];
-
-  for (const q of queue) {
-    try {
-      const result = await placeOrderOnline(q);
-      if (result) synced += 1;
-      else failed.push(q);
-    } catch {
-      failed.push(q);
-    }
-  }
-
-  await replaceQueue(failed);
-  return synced;
+  const result = await syncBunker();
+  return result.pushed;
 }
 
 async function placeOrderOnline(q: QueuedOrder): Promise<boolean> {
@@ -374,16 +488,7 @@ export async function fetchProfiles(): Promise<Profile[]> {
   return (data ?? []) as Profile[];
 }
 
-// Look up a single product by scanned barcode
-export async function findProductByBarcode(barcode: string): Promise<Product | null> {
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .eq('barcode', barcode)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as Product;
-}
+
 
 export async function fetchMyOrdersToday(staffId: string): Promise<Fetched<Order[]>> {
   const startOfDay = new Date();
