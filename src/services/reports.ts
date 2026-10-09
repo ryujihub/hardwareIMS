@@ -14,13 +14,76 @@ export interface DailySalesRow {
   total_delivery: number;
 }
 
+const DAILY_SALES_VIEW_DDL = `
+create or replace view public.daily_sales as
+select
+  date_trunc('day', created_at)  as day,
+  count(*)::int                  as total_orders,
+  coalesce(sum(total), 0)        as total_revenue,
+  coalesce(sum(subtotal), 0)     as total_subtotal,
+  coalesce(sum(delivery_fee), 0) as total_delivery
+from public.orders
+where status <> 'cancelled'
+group by 1
+order by 1 desc;
+`;
+
 export async function fetchDailySales(limitDays = 14): Promise<DailySalesRow[]> {
+  // Prefer the server-side daily_sales view when it exists (fast, always correct).
+  // If the view was never created in this database, fall back to computing the
+  // same aggregate client-side from orders so the Admin screen still shows real
+  // sales instead of a blank "No sales recorded yet." empty state.
   const { data, error } = await supabase
     .from('daily_sales')
-    .select('*')
+    .select('day, total_orders, total_revenue, total_subtotal, total_delivery')
+    .order('day', { ascending: false })
     .limit(limitDays);
-  if (error || !data) return [];
-  return data as DailySalesRow[];
+
+  if (!error && data) {
+    return data as DailySalesRow[];
+  }
+
+  // Missing view / not a "not found"-style error we can recover from? Still try
+  // the client-side aggregate so the dashboard is never blank when orders exist.
+  return computeDailySalesFromOrders(limitDays);
+}
+
+async function computeDailySalesFromOrders(limitDays = 14): Promise<DailySalesRow[]> {
+  const { data: orders, error } = await supabase
+    .from('orders')
+    .select('created_at, total, subtotal, delivery_fee, status')
+    .order('created_at', { ascending: false });
+
+  if (error || !orders) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - limitDays);
+
+  const byDay = new Map<string, DailySalesRow>();
+  for (const o of orders) {
+    if (o.status === 'cancelled') continue;
+    if (!o.created_at) continue;
+    const d = new Date(o.created_at);
+    if (d < cutoff) continue;
+    const key = d.toISOString().slice(0, 10);
+    const existing = byDay.get(key);
+    if (existing) {
+      existing.total_orders += 1;
+      existing.total_revenue += Number(o.total || 0);
+      existing.total_subtotal += Number(o.subtotal || 0);
+      existing.total_delivery += Number(o.delivery_fee || 0);
+    } else {
+      byDay.set(key, {
+        day: o.created_at.slice(0, 10),
+        total_orders: 1,
+        total_revenue: Number(o.total || 0),
+        total_subtotal: Number(o.subtotal || 0),
+        total_delivery: Number(o.delivery_fee || 0),
+      });
+    }
+  }
+
+  return Array.from(byDay.values()).sort((a, b) => (b.day < a.day ? 1 : -1));
 }
 
 function escapeCsv(value: unknown): string {
