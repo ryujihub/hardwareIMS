@@ -33,7 +33,13 @@ export function MainTabs() {
   const isStaff = profile?.role === 'staff';
 
   // Staff: Home (check-in/out), New Order, Stock only. Manager/admin: everything.
-  const visibleTabs = TABS.filter((t) => !isStaff || t.staffAllowed);
+  // Also: staff cannot access New Order unless checked in.
+  const visibleTabs = TABS.filter((t) => {
+    if (!isStaff) return true;
+    if (!t.staffAllowed) return false;
+    if (t.key === 'new') return profile?.checked_in === true;
+    return true;
+  });
 
   const [rawTab, setTab] = useState<TabKey>('home');
   const [receipt, setReceipt] = useState<{ order: Order; items?: OrderItem[] } | null>(null);

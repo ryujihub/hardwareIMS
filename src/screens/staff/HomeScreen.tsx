@@ -97,7 +97,16 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
 
       {/* Quick actions */}
       <View style={styles.actionsRow}>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.primary }]} onPress={onNewOrder}>
+        <Pressable
+          style={[styles.actionBtn, { backgroundColor: colors.primary, opacity: checkedIn ? 1 : 0.5 }]}
+          onPress={() => {
+            if (!checkedIn) {
+              Alert.alert('Check in required', 'You must check in to create a new order.');
+              return;
+            }
+            onNewOrder();
+          }}
+        >
           <Text style={styles.actionIcon}>🛒</Text>
           <Text style={styles.actionText}>New Order</Text>
         </Pressable>

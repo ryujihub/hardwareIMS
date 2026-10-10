@@ -524,8 +524,12 @@ function RolesCard() {
           onPress: () => {
             void (async () => {
               const { error } = await supabase.rpc('delete_user', { p_user_id: userId });
-              if (error) setMsg(`Error: ${error.message}`);
-              else {
+              if (error) {
+                const msg = /schema cache|function|delete_user/i.test(error.message)
+                  ? `${error.message} — run supabase/migration_delete_user.sql in SQL Editor`
+                  : error.message;
+                setMsg(`Error: ${msg}`);
+              } else {
                 setMsg(`✓ ${userName}'s account deleted`);
                 void load();
               }
