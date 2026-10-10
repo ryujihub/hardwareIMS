@@ -28,7 +28,6 @@ export function StockScreen() {
   const isAdmin = profile?.role === 'admin' || profile?.role === 'manager';
 
   const [products, setProducts] = useState<Product[]>([]);
-  const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Product | null>(null);
@@ -80,7 +79,6 @@ export function StockScreen() {
   const load = useCallback(async () => {
     const res = await fetchProducts();
     setProducts(res.data);
-    setOffline(res.offline);
     setLoading(false);
   }, []);
 
@@ -151,10 +149,6 @@ export function StockScreen() {
           </Pressable>
         ) : null}
       </View>
-
-      {offline ? (
-        <Text style={styles.offline}>📴 Offline — cached stock levels</Text>
-      ) : null}
 
       <View style={styles.searchRow}>
         <TextInput
@@ -519,7 +513,6 @@ function makeStyles(c: import('@/theme').Palette) {
     title: { fontSize: 20, fontWeight: '800', color: c.primary },
     addButton: { backgroundColor: c.primary, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
     addText: { color: c.onPrimary, fontWeight: '700' },
-    offline: { color: c.warning, fontSize: 12, fontWeight: '600', paddingHorizontal: spacing(4) },
     searchRow: {
       flexDirection: 'row', alignItems: 'center', gap: spacing(2),
       marginHorizontal: spacing(4), marginTop: spacing(2),

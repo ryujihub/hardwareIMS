@@ -94,18 +94,3 @@ export const DEFAULT_SETTINGS: Settings = {
   low_stock_threshold: 5,
   categories: [],
 };
-
-// An order captured while offline, waiting to sync
-export interface QueuedOrder {
-  localId: string;
-  createdAt: string;
-  payload: {
-    customer_name: string;
-    customer_phone: string | null;
-    items: CartItem[];
-    payment_method: PaymentMethod;
-    subtotal: number;
-    delivery_fee: number;
-    total: number;
-  };
-}

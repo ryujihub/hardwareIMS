@@ -10,6 +10,7 @@ import { StockScreen } from '@/screens/staff/StockScreen';
 import { AdminScreen } from '@/screens/admin/AdminScreen';
 import { LogsScreen } from '@/screens/admin/LogsScreen';
 import { ReceiptScreen } from '@/screens/staff/ReceiptScreen';
+import { setReceiptNav } from '@/navigation/useReceipt';
 import { NewOrderProvider } from '@/hooks/useNewOrder';
 import { setNewOrderNav } from './useNewOrderNav';
 import type { Order, OrderItem } from '@/types';
@@ -45,6 +46,9 @@ export function MainTabs() {
   if (receipt) {
     return <ReceiptScreen order={receipt.order} items={receipt.items} onClose={() => setReceipt(null)} />;
   }
+
+  // Let any screen open the receipt (checkout does this once an order is saved).
+  setReceiptNav({ show: (order, items) => setReceipt({ order, items }) });
 
   // Keep the shared navigation singleton in sync so the screens can navigate.
   setNewOrderNav({

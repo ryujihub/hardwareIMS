@@ -72,7 +72,7 @@
 **On screen:** Admin tab → metrics cards, recent orders (tap to expand status/payment), Daily Sales with PDF/CSV export, Top Staff, Settings, Roles with + Add Account and Delete.
 
 **Narration:**
-> "For managers and admins, the dashboard shows the big picture: today's sales, inventory value, receivables, and pending offline sync.
+> "For managers and admins, the dashboard shows the big picture: today's sales, inventory value, receivables, and top staff.
 >
 > Tap any order to change its status or payment. Cancelling an order automatically returns the items to stock.
 >

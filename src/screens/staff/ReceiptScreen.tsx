@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Print from 'expo-print';
 import { getOrderItems } from '@/services/db';
+import { saveReceiptPdf } from '@/services/pdf';
 import { useSettings, useStyles } from '@/services/settings';
 import { peso, formatDateTime, escapeHtml } from '@/utils/format';
 import { colors, spacing, createStyleSheet } from '@/theme';
@@ -52,9 +53,9 @@ export function ReceiptScreen({ order, items: itemsProp, onClose }: Props) {
   const styles = useStyles(makeStyles);
   const [items, setItems] = useState<OrderItem[]>(itemsProp ?? []);
 
-  // For orders opened from history (no items passed), load them from the database
+  // For orders opened without items (e.g. from history), load them from the database
   useEffect(() => {
-    if (itemsProp || order.id.startsWith('local_')) return;
+    if (itemsProp) return;
     let active = true;
     void getOrderItems(order.id).then((rows) => {
       if (active) setItems(rows);
@@ -64,9 +65,15 @@ export function ReceiptScreen({ order, items: itemsProp, onClose }: Props) {
     };
   }, [order.id, itemsProp]);
 
-  // PDF is generated on demand; on web this opens the browser's print dialog.
+  // Native: expo-print renders the receipt HTML to a PDF. Web: expo-print's web
+  // stub only calls window.print() (printing the app screen), so build a real
+  // PDF with jsPDF and download it instead.
   async function printPdf() {
     try {
+      if (Platform.OS === 'web') {
+        await saveReceiptPdf(order, items);
+        return;
+      }
       const { uri } = await Print.printToFileAsync({
         html: receiptHtml(order, items, settings.store_name, settings.tagline, settings.receipt_footer),
       });
@@ -74,8 +81,8 @@ export function ReceiptScreen({ order, items: itemsProp, onClose }: Props) {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Receipt PDF' });
       }
-    } catch {
-      // Printing is best-effort; receipt is still visible on screen
+    } catch (err) {
+      Alert.alert('Could not create PDF', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -128,9 +135,6 @@ export function ReceiptScreen({ order, items: itemsProp, onClose }: Props) {
           <Text style={styles.thanks}>{settings.receipt_footer}</Text>
         </View>
 
-        {order.id.startsWith('local_') ? (
-          <Text style={styles.pendingNote}>📴 Offline order — will sync automatically</Text>
-        ) : null}
       </ScrollView>
 
       <View style={styles.footer}>
@@ -168,7 +172,6 @@ function makeStyles(c: import('@/theme').Palette) {
     grandLabel: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
     grandValue: { fontSize: 15, fontWeight: '800', color: c.primary },
     thanks: { textAlign: 'center', marginTop: spacing(3), fontSize: 13, color: '#64748b' },
-    pendingNote: { textAlign: 'center', color: c.warning, fontSize: 12, fontWeight: '600', marginTop: spacing(3) },
     footer: { flexDirection: 'row', gap: spacing(3), padding: spacing(4), backgroundColor: c.card, borderTopWidth: 1, borderTopColor: c.border },
     printBtn: { flex: 2, backgroundColor: c.primary, borderRadius: 10, paddingVertical: spacing(3.5), alignItems: 'center' },
     printText: { color: c.onPrimary, fontWeight: '700' },

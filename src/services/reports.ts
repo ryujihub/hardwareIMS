@@ -4,6 +4,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabase';
 import { getSettings } from './settings';
+import { saveSalesPdf } from './pdf';
 import { peso, formatDateTime, escapeHtml } from '@/utils/format';
 
 export interface DailySalesRow {
@@ -14,58 +15,36 @@ export interface DailySalesRow {
   total_delivery: number;
 }
 
-const DAILY_SALES_VIEW_DDL = `
-create or replace view public.daily_sales as
-select
-  date_trunc('day', created_at)  as day,
-  count(*)::int                  as total_orders,
-  coalesce(sum(total), 0)        as total_revenue,
-  coalesce(sum(subtotal), 0)     as total_subtotal,
-  coalesce(sum(delivery_fee), 0) as total_delivery
-from public.orders
-where status <> 'cancelled'
-group by 1
-order by 1 desc;
-`;
-
-export async function fetchDailySales(limitDays = 14): Promise<DailySalesRow[]> {
-  // Prefer the server-side daily_sales view when it exists (fast, always correct).
-  // If the view was never created in this database, fall back to computing the
-  // same aggregate client-side from orders so the Admin screen still shows real
-  // sales instead of a blank "No sales recorded yet." empty state.
-  const { data, error } = await supabase
-    .from('daily_sales')
-    .select('day, total_orders, total_revenue, total_subtotal, total_delivery')
-    .order('day', { ascending: false })
-    .limit(limitDays);
-
-  if (!error && data) {
-    return data as DailySalesRow[];
-  }
-
-  // Missing view / not a "not found"-style error we can recover from? Still try
-  // the client-side aggregate so the dashboard is never blank when orders exist.
-  return computeDailySalesFromOrders(limitDays);
+// Daily sales are grouped by the store's LOCAL calendar day. Bucketing by the
+// raw UTC timestamp pushed late-evening orders into the previous day, which made
+// this report disagree with the dashboard's "Today" counters. We compute it here
+// (instead of querying the daily_sales view) so both always use the same rule.
+function localDayKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-async function computeDailySalesFromOrders(limitDays = 14): Promise<DailySalesRow[]> {
+export async function fetchDailySales(limitDays = 14): Promise<DailySalesRow[]> {
+  // Only pull the orders inside the window (local midnight N-1 days ago → now).
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - (limitDays - 1));
+
   const { data: orders, error } = await supabase
     .from('orders')
     .select('created_at, total, subtotal, delivery_fee, status')
+    .neq('status', 'cancelled')
+    .gte('created_at', cutoff.toISOString())
     .order('created_at', { ascending: false });
 
   if (error || !orders) return [];
 
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - limitDays);
-
   const byDay = new Map<string, DailySalesRow>();
   for (const o of orders) {
-    if (o.status === 'cancelled') continue;
     if (!o.created_at) continue;
-    const d = new Date(o.created_at);
-    if (d < cutoff) continue;
-    const key = d.toISOString().slice(0, 10);
+    const key = localDayKey(new Date(o.created_at));
     const existing = byDay.get(key);
     if (existing) {
       existing.total_orders += 1;
@@ -74,7 +53,7 @@ async function computeDailySalesFromOrders(limitDays = 14): Promise<DailySalesRo
       existing.total_delivery += Number(o.delivery_fee || 0);
     } else {
       byDay.set(key, {
-        day: o.created_at.slice(0, 10),
+        day: key,
         total_orders: 1,
         total_revenue: Number(o.total || 0),
         total_subtotal: Number(o.subtotal || 0),
@@ -137,6 +116,12 @@ async function shareFile(uri: string, mimeType: string, title: string): Promise<
 }
 
 export async function exportSalesPdf(rows: DailySalesRow[], title: string): Promise<void> {
+  // On web `expo-print` only calls window.print() and returns no uri, so the
+  // "PDF" was a print of the app screen. Build a real PDF instead.
+  if (Platform.OS === 'web') {
+    await saveSalesPdf(rows, title);
+    return;
+  }
   const { uri } = await Print.printToFileAsync({ html: buildSalesHtml(rows, title) });
   await shareFile(uri, 'application/pdf', title);
 }

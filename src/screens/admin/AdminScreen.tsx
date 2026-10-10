@@ -11,7 +11,6 @@ import {
 } from '@/services/db';
 import { useSettings, useStyles } from '@/services/settings';
 import { fetchDailySales, exportSalesPdf, exportSalesCsv, type DailySalesRow } from '@/services/reports';
-import { getQueue } from '@/store/cache';
 import { peso, isSameLocalDay } from '@/utils/format';
 import { isLowStock } from '@/utils/stock';
 import { colors, spacing, createStyleSheet } from '@/theme';
@@ -42,18 +41,13 @@ export function AdminScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [staff, setStaff] = useState<Profile[]>([]);
   const [sales, setSales] = useState<DailySalesRow[]>([]);
-  const [offline, setOffline] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
 
   const load = useCallback(async () => {
     const [p, o, s] = await Promise.all([fetchProducts(), fetchRecentOrders(100), fetchDailySales(14)]);
     setProducts(p.data);
-    setOffline(p.offline);
     setOrders(o.data);
     setSales(s);
     setStaff(await fetchProfiles());
-    const queue = await getQueue();
-    setPendingCount(queue.length);
   }, []);
 
   useEffect(() => {
@@ -74,10 +68,12 @@ export function AdminScreen() {
   const lowStock = products.filter((p) => isLowStock(p, settings.low_stock_threshold));
 
   const staffLeaderboard = useMemo(() => {
-    const map = new Map<string, { name: string; orders: number; sales: number }>();
+    // Keyed by staff_id (stable). Several ids can resolve to the same display
+    // name (e.g. "Unknown" for deleted accounts), so the name is not a safe key.
+    const map = new Map<string, { id: string; name: string; orders: number; sales: number }>();
     orders.forEach((o) => {
       if (!o.staff_id || o.status === 'cancelled') return;
-      const entry = map.get(o.staff_id) ?? { name: staffName(o.staff_id), orders: 0, sales: 0 };
+      const entry = map.get(o.staff_id) ?? { id: o.staff_id, name: staffName(o.staff_id), orders: 0, sales: 0 };
       entry.orders += 1;
       entry.sales += Number(o.total);
       map.set(o.staff_id, entry);
@@ -116,18 +112,12 @@ export function AdminScreen() {
         <Text style={styles.statValue}>{peso(receivables)}</Text>
         <Text style={styles.statSub}>unpaid + partial</Text>
       </View>
-      <View style={styles.card}>
-        <Text style={styles.statLabel}>Pending Sync</Text>
-        <Text style={styles.statValue}>{pendingCount}</Text>
-        <Text style={styles.statSub}>offline orders</Text>
-      </View>
     </>
   );
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <Text style={styles.title}>📊 Admin Dashboard</Text>
-      {offline ? <Text style={styles.offline}>📴 Offline — cached data</Text> : null}
 
       {/* Responsive: single column on phones, metrics | reports side-by-side ≥768px */}
       <View style={isWide ? styles.wideRow : null}>
@@ -149,8 +139,8 @@ export function AdminScreen() {
 
           <Text style={styles.section}>🏆 Top Staff (recent)</Text>
           {staffLeaderboard.slice(0, 5).map((s, i) => (
-            <View key={s.name} style={styles.card}>
-              <Text style={styles.orderName}>{i + 1}. {s.name} — {s.orders} orders · {peso(s.sales)}</Text>
+            <View key={s.id} style={styles.card}>
+              <Text style={styles.orderName}>{i + 1}. {s.name} — {s.orders} order{s.orders === 1 ? '' : 's'} · {peso(s.sales)}</Text>
             </View>
           ))}
 
@@ -246,13 +236,21 @@ function OrderRow({ order, staffName, onChanged }: { order: Order; staffName: st
 function DailySalesCard({ sales }: { sales: DailySalesRow[] }) {
   const styles = useStyles(makeStyles);
 
-  function exportPdf() {
+  async function exportPdf() {
     if (sales.length === 0) return Alert.alert('No data', 'No sales recorded yet.');
-    void exportSalesPdf(sales, 'Daily Sales Report');
+    try {
+      await exportSalesPdf(sales, 'Daily Sales Report');
+    } catch (err) {
+      Alert.alert('PDF export failed', err instanceof Error ? err.message : String(err));
+    }
   }
-  function exportCsv() {
+  async function exportCsv() {
     if (sales.length === 0) return Alert.alert('No data', 'No sales recorded yet.');
-    void exportSalesCsv(sales, 'daily_sales');
+    try {
+      await exportSalesCsv(sales, 'daily_sales');
+    } catch (err) {
+      Alert.alert('CSV export failed', err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -260,7 +258,7 @@ function DailySalesCard({ sales }: { sales: DailySalesRow[] }) {
       {sales.slice(0, 7).map((r) => (
         <View key={r.day} style={styles.salesRow}>
           <Text style={styles.salesDay}>{r.day.slice(0, 10)}</Text>
-          <Text style={styles.salesOrders}>{r.total_orders} orders</Text>
+          <Text style={styles.salesOrders}>{r.total_orders} order{r.total_orders === 1 ? '' : 's'}</Text>
           <Text style={styles.salesRevenue}>{peso(Number(r.total_revenue))}</Text>
         </View>
       ))}
@@ -718,7 +716,6 @@ function makeStyles(c: import('@/theme').Palette) {
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: c.bg },
     title: { fontSize: 20, fontWeight: '800', color: c.primary, marginBottom: spacing(3) },
     lockedTitle: { fontSize: 17, fontWeight: '700', color: c.text },
-    offline: { color: c.warning, fontSize: 12, fontWeight: '600', marginBottom: spacing(3) },
     wideRow: { flexDirection: 'row', gap: spacing(5), alignItems: 'flex-start' },
     wideCol: { flex: 1, minWidth: 0 },
     statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(3), marginBottom: spacing(2) },

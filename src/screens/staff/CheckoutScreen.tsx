@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@/navigation/useNewOrderNav';
+import { useReceipt } from '@/navigation/useReceipt';
 import { useNewOrder } from '@/hooks/useNewOrder';
 import { useStyles } from '@/services/settings';
 import { peso } from '@/utils/format';
@@ -10,6 +11,7 @@ import type { CartItem } from '@/types';
 
 export function CheckoutScreen() {
   const navigation = useNavigation();
+  const receipt = useReceipt();
   const styles = useStyles(makeStyles);
   const {
     settings,
@@ -36,15 +38,16 @@ export function CheckoutScreen() {
 
   const handleComplete = useCallback(async () => {
     setLocalBusy(true);
-    const ok = await completeOrder(() => {
-      // Return to the product-selection screen after a successful order.
+    const ok = await completeOrder((order, items) => {
+      // Show the printable receipt, then return to product selection behind it.
+      receipt.show(order, items);
       navigation.goBack();
     });
     setLocalBusy(false);
     if (!ok) {
       // completeOrder already showed its own alert; stay on checkout.
     }
-  }, [completeOrder, navigation]);
+  }, [completeOrder, navigation, receipt]);
 
   return (
     <View style={styles.root}>

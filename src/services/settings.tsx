@@ -83,8 +83,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }
     const res = await fetchSettings();
     setOffline(res.offline);
-    apply(res.data);
-    await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(res.data));
+    // Only overwrite the applied/cached settings when the server answered —
+    // a failed fetch returns defaults and must not wipe the store's branding.
+    if (!res.offline) {
+      apply(res.data);
+      await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(res.data));
+    }
   }, [apply]);
 
   // Load customization on launch and again once the user signs in

@@ -1,6 +1,5 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import NetInfo from '@react-native-community/netinfo';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,7 +7,6 @@ import { AuthProvider, useAuth } from '@/services/auth';
 import { SettingsProvider, useStyles, useSettings } from '@/services/settings';
 import { MainTabs } from '@/navigation';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
-import { syncQueuedOrders } from '@/services/db';
 import { colors } from '@/theme';
 
 function Root() {
@@ -44,15 +42,6 @@ function AppShell() {
 }
 
 export default function App() {
-  // Offline-first: whenever connectivity returns (or at launch), flush queued orders
-  useEffect(() => {
-    void syncQueuedOrders();
-    const unsub = NetInfo.addEventListener((state) => {
-      if (state.isConnected) void syncQueuedOrders();
-    });
-    return () => unsub();
-  }, []);
-
   return (
     <AuthProvider>
       <SettingsProvider>

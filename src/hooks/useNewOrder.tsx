@@ -1,5 +1,5 @@
 import { createContext, useCallback, useMemo, useState, useContext } from 'react';
-import { Alert, Platform } from 'react-native';
+import { Alert } from 'react-native';
 import { useAuth } from '@/services/auth';
 import { fetchProducts, findProductByBarcode, placeOrder } from '@/services/db';
 import { useSettings } from '@/services/settings';
@@ -23,7 +23,6 @@ export interface NewOrderState {
   deliveryFee: string;
   payment: PaymentMethod;
   busy: boolean;
-  offline: boolean;
   scanning: boolean;
 }
 
@@ -36,7 +35,6 @@ export interface NewOrderActions {
   setDeliveryFee: (v: string) => void;
   setPayment: (v: PaymentMethod) => void;
   setBusy: (v: boolean) => void;
-  setOffline: (v: boolean) => void;
   setScanning: (v: boolean) => void;
   addToCart: (p: Product) => void;
   changeQty: (productId: string, delta: number) => void;
@@ -63,7 +61,6 @@ export interface NewOrderContextValue extends NewOrderState {
   setDeliveryFee: (v: string) => void;
   setPayment: (v: PaymentMethod) => void;
   setBusy: (v: boolean) => void;
-  setOffline: (v: boolean) => void;
   setScanning: (v: boolean) => void;
   load: () => Promise<void>;
 }
@@ -91,13 +88,12 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
     deliveryFee: String(settings.delivery_fee ?? 50),
     payment: 'cash',
     busy: false,
-    offline: false,
     scanning: false,
   });
 
   const load = useCallback(async () => {
     const res = await fetchProducts();
-    setState((prev) => ({ ...prev, products: res.data, offline: res.offline }));
+    setState((prev) => ({ ...prev, products: res.data }));
   }, []);
 
   // Keep delivery fee in sync with admin settings
@@ -184,8 +180,6 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
     }
 
     setState((prev) => ({ ...prev, busy: true }));
-    const actingStaffId = profile?.id ?? null;
-    const actingStaffName = profile?.name ?? 'Demo Staff';
 
     const result = await placeOrder({
       customerName: state.customerName.trim(),
@@ -204,10 +198,10 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
     }
 
     const order: Order = {
-      id: result.offline ? result.queued.localId : result.orderId,
+      id: result.orderId,
       customer_name: state.customerName.trim(),
       customer_phone: state.customerPhone.trim() || null,
-      staff_id: result.offline ? (actingStaffId ?? null) : (profile?.id ?? null),
+      staff_id: profile?.id ?? null,
       subtotal,
       delivery_fee: feeNum,
       total,
@@ -234,14 +228,6 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
       customerPhone: '',
     }));
 
-    if (result.offline) {
-      const who = actingStaffName ?? 'Demo Staff';
-      if (Platform.OS === 'web') {
-        alert(`Saved offline 📴 — ${who} order queued and will sync automatically.`);
-      } else {
-        Alert.alert('Saved offline 📴', `No connection right now — ${who} order is queued and will sync automatically.`);
-      }
-    }
     onOrderPlaced?.(order, items);
     return true;
   }
@@ -266,7 +252,6 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
     setDeliveryFee: (v) => setState((prev) => ({ ...prev, deliveryFee: v })),
     setPayment: (v) => setState((prev) => ({ ...prev, payment: v })),
     setBusy: (v) => setState((prev) => ({ ...prev, busy: v })),
-    setOffline: (v) => setState((prev) => ({ ...prev, offline: v })),
     setScanning: (v) => setState((prev) => ({ ...prev, scanning: v })),
     addToCart,
     changeQty,

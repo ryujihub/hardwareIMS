@@ -7,10 +7,9 @@ Mobile-first inventory & order management app (Phase 1 MVP) built with **Expo (R
 - **Auth** — Supabase email/password login with persistent sessions
 - **Check-in/out** — one-tap shift toggle on Home, saved per user
 - **New Order** — product search, cart with qty steppers, editable delivery fee, cash/card/GCash
-- **Offline-first** — orders made offline are queued in AsyncStorage and sync automatically on reconnect
 - **Stock** — searchable list, low-stock badges, admin add/edit products with audited stock adjustments
-- **Receipts** — on-screen receipt + Print/Save-as-PDF via expo-print
-- **Admin dashboard** — today's stats, inventory value, pending-sync count, recent orders, staff leaderboard, delivery fee setting, role management
+- **Receipts** — on-screen receipt + Print/Save-as-PDF (real text PDF: `expo-print` on native, jsPDF on web)
+- **Admin dashboard** — today's stats, inventory value, recent orders, staff leaderboard, daily sales report (PDF/CSV), delivery fee setting, role management
 - **Customizable** — admins can rebrand the app (store name, tagline, currency, receipt footer), restyle it (primary/accent colors, dark mode), tune ordering rules (payment methods, low-stock threshold), and manage the product category list — all from Admin → Settings, applied instantly
 
 ## 1. Set up the database (one time, ~2 minutes)
@@ -49,7 +48,7 @@ Press `w` for web, `a` for Android emulator, or scan the QR with **Expo Go** on 
 
 ```
 src/
-├── App.tsx              # Auth gate + connectivity watcher + queue sync
+├── App.tsx              # Auth gate
 ├── navigation/          # Bottom tabs + receipt overlay
 ├── screens/
 │   ├── auth/            # Login
@@ -58,13 +57,14 @@ src/
 ├── services/
 │   ├── supabase.ts      # Client (env-driven)
 │   ├── auth.tsx         # Auth context + check-in state
-│   └── db.ts            # Data layer with offline fallback + sync
-├── store/cache.ts       # AsyncStorage cache + offline order queue
+│   ├── db.ts            # Data layer (Supabase is the source of truth)
+│   ├── reports.ts       # Daily-sales aggregate + CSV export
+│   └── pdf.ts           # jsPDF report/receipt builders (web)
 ├── theme/  types/  utils/
 supabase/schema.sql      # Paste into SQL editor
 ```
 
-**Offline behavior:** reads fall back to the last cached snapshot (an offline banner appears); writes to `orders` are queued with a local ID and flushed by `syncQueuedOrders()` on reconnect, app launch, and check-in. The receipt marks offline orders with the queued ID until synced.
+**Online-only:** the app reads and writes directly against Supabase. A connection is required to place an order; if Supabase is unreachable, the action surfaces an error instead of queueing locally. Settings keep a small on-device cache so the last known branding still renders while the session loads.
 
 ## Customization
 
@@ -77,7 +77,7 @@ Everything in **Admin → Settings** is stored in the single `settings` row and 
 | 🛒 Ordering rules | Default delivery fee, which payment methods are accepted, low-stock alert threshold |
 | 🗂️ Categories | The product category quick-picks used when adding/editing products |
 
-Settings are cached on-device, so the customization survives offline use. The theme engine (`src/theme/index.ts`) mutates a shared palette; every screen rebuilds its styles when the settings version changes, so no restart is needed.
+Settings are cached on-device so the last known branding renders instantly on launch. The theme engine (`src/theme/index.ts`) mutates a shared palette; every screen rebuilds its styles when the settings version changes, so no restart is needed.
 
 ## Security model (RLS)
 

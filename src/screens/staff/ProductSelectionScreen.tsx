@@ -16,7 +16,6 @@ export function ProductSelectionScreen() {
     query,
     filtered,
     cart,
-    offline,
     scanning,
     load,
     setQuery,
@@ -60,7 +59,6 @@ export function ProductSelectionScreen() {
     <View style={styles.root}>
       <View style={styles.header}>
         <Text style={styles.title}>🛒 Add products</Text>
-        {offline ? <Text style={styles.offlineTag}>OFFLINE</Text> : null}
       </View>
 
       <ScrollView
@@ -215,7 +213,6 @@ function makeStyles(c: import('@/theme').Palette) {
     root: { flex: 1, backgroundColor: c.bg },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing(4), paddingBottom: spacing(2) },
     title: { fontSize: 20, fontWeight: '800', color: c.primary },
-    offlineTag: { color: c.danger, backgroundColor: c.dangerBg, fontWeight: '800', fontSize: 11, paddingHorizontal: spacing(2), paddingVertical: spacing(1), borderRadius: 8, overflow: 'hidden' },
     content: { padding: spacing(4), paddingTop: 0, paddingBottom: spacing(8) },
     label: { fontSize: 12, fontWeight: '600', color: c.textMuted, marginBottom: spacing(1), marginTop: spacing(2) },
     search: { borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: spacing(3), paddingVertical: spacing(3), fontSize: 15, backgroundColor: c.card, marginBottom: spacing(3), color: c.text },

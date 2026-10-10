@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/services/auth';
-import { fetchProducts, fetchRecentOrders, syncQueuedOrders } from '@/services/db';
+import { fetchProducts, fetchRecentOrders } from '@/services/db';
 import { useSettings, useStyles } from '@/services/settings';
 import { useSupabaseRealtime } from '@/services/useSupabaseRealtime';
-import { getQueue } from '@/store/cache';
 import { peso, isSameLocalDay } from '@/utils/format';
 import { isLowStock } from '@/utils/stock';
 import { colors, spacing, createStyleSheet } from '@/theme';
@@ -21,17 +20,12 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
   const styles = useStyles(makeStyles);
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [pendingCount, setPendingCount] = useState(0);
-  const [offline, setOffline] = useState(false);
   const realtimeChanges = useSupabaseRealtime(['products', 'orders']);
 
   const load = useCallback(async () => {
     const [p, o] = await Promise.all([fetchProducts(), fetchRecentOrders(50)]);
     setProducts(p.data);
-    setOffline(p.offline);
     setOrders(o.data);
-    const queue = await getQueue();
-    setPendingCount(queue.length);
   }, []);
 
   useEffect(() => {
@@ -56,7 +50,6 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
   async function toggleCheckIn() {
     const next = !checkedIn;
     await setCheckedIn(next);
-    if (next) void syncQueuedOrders(); // flush any queued orders when starting a shift
   }
 
   return (
@@ -75,12 +68,6 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
           <Text style={styles.signOutText}>Sign Out</Text>
         </Pressable>
       </View>
-
-      {offline ? (
-        <View style={styles.offlineBanner}>
-          <Text style={styles.offlineText}>📴 Offline — showing cached data. Orders will sync when back online.</Text>
-        </View>
-      ) : null}
 
       {/* Check-in card */}
       <Pressable
@@ -107,12 +94,6 @@ export function HomeScreen({ onNewOrder, onGoStock }: Props) {
           <Text style={styles.statValue}>{peso(todaySales)}</Text>
         </View>
       </View>
-
-      {pendingCount > 0 ? (
-        <View style={[styles.card, styles.pendingCard]}>
-          <Text style={styles.pendingText}>⏳ {pendingCount} order{pendingCount > 1 ? 's' : ''} waiting to sync</Text>
-        </View>
-      ) : null}
 
       {/* Quick actions */}
       <View style={styles.actionsRow}>
@@ -157,8 +138,6 @@ function makeStyles(c: import('@/theme').Palette) {
     brand: { fontSize: 20, fontWeight: '800', color: c.primary, flex: 1 },
     signOutBtn: { borderWidth: 1, borderColor: c.border, backgroundColor: c.card, borderRadius: 8, paddingHorizontal: spacing(3), paddingVertical: spacing(1.5) },
     signOutText: { color: c.danger, fontWeight: '700', fontSize: 13 },
-    offlineBanner: { backgroundColor: c.warningBg, borderRadius: 10, padding: spacing(3), marginBottom: spacing(3) },
-    offlineText: { color: c.warning, fontSize: 13, fontWeight: '600' },
     card: { backgroundColor: c.card, borderRadius: 12, padding: spacing(4), marginBottom: spacing(3), borderWidth: 1, borderColor: c.border },
     checkInCard: { flexDirection: 'row', alignItems: 'center' },
     checkedIn: { backgroundColor: c.successBg, borderColor: c.success },
@@ -170,8 +149,6 @@ function makeStyles(c: import('@/theme').Palette) {
     statCard: { flex: 1, alignItems: 'center' },
     statLabel: { fontSize: 12, color: c.textMuted },
     statValue: { fontSize: 20, fontWeight: '800', color: c.primary, marginTop: spacing(1) },
-    pendingCard: { backgroundColor: c.warningBg, borderColor: c.warning },
-    pendingText: { color: c.warning, fontWeight: '600', fontSize: 13 },
     actionsRow: { flexDirection: 'row', gap: spacing(3), marginBottom: spacing(3) },
     actionBtn: { flex: 1, borderRadius: 12, paddingVertical: spacing(4), alignItems: 'center' },
     actionIcon: { fontSize: 26 },
