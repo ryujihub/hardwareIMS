@@ -57,9 +57,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function loadProfile(userId: string) {
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
     if (data) {
-      setProfile(data as Profile);
+      const row = data as Profile;
+      setProfile(row);
+      // The server's shift state is the source of truth so every device agrees
+      // (check in on the phone, the browser knows too). The on-device copy is
+      // only a fallback for rows that predate the `checked_in` column.
       const stored = await AsyncStorage.getItem(CHECKIN_KEY);
-      if (stored === 'true') setCheckedInState(true);
+      setCheckedInState(typeof row.checked_in === 'boolean' ? row.checked_in : stored === 'true');
     }
   }
 
@@ -93,6 +97,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function setCheckedIn(value: boolean): Promise<void> {
     setCheckedInState(value);
+    // Keep the in-memory profile in step so anything reading `profile.checked_in`
+    // sees the new value immediately rather than a stale login-time snapshot.
+    setProfile((p) => (p ? { ...p, checked_in: value } : p));
     await AsyncStorage.setItem(CHECKIN_KEY, value ? 'true' : 'false');
     if (profile) {
       await supabase

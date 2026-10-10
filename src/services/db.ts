@@ -230,6 +230,8 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     const staffId = me.data?.user?.id ?? null;
     if (!staffId) return { ok: false, error: 'You are signed out — please sign in again.' };
 
+    const totalCost = input.items.reduce((s, i) => s + (i.cost_price || 0) * i.quantity, 0);
+
     const { data: supOrder, error: orderError } = await supabase
       .from('orders')
       .insert({
@@ -239,6 +241,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         subtotal: input.subtotal,
         delivery_fee: input.deliveryFee,
         total: input.total,
+        total_cost: totalCost,
         payment_method: input.paymentMethod,
         status: 'completed',
         completed_at: new Date().toISOString(),
@@ -253,6 +256,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       product_id: item.productId || null,
       name: item.name,
       price: item.price,
+      cost_price: item.cost_price || 0,
       quantity: item.quantity,
     }));
     const { error: itemsError } = await supabase.from('order_items').insert(rows);
@@ -273,7 +277,34 @@ export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
   return (data ?? []) as OrderItem[];
 }
 
+// ---------- Date-range recent orders (Admin) ----------
+export async function fetchRecentOrdersInRange(
+  startDate: string,
+  endDate: string,
+  limit = 100
+): Promise<Fetched<Order[]>> {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .gte('created_at', startDate)
+      .lte('created_at', endDate)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return { data: (data ?? []) as Order[], offline: false };
+  } catch {
+    return { data: [], offline: true };
+  }
+}
+
 // ---------- Order status & payment tracking (Phase 2/3) ----------
+
+export async function deleteOrder(orderId: string): Promise<{ error: string | null }> {
+  // Cascading deletes on the database ensure order_items are removed as well
+  const { error } = await supabase.from('orders').delete().eq('id', orderId);
+  return { error: error ? error.message : null };
+}
 
 export async function setOrderStatus(orderId: string, status: OrderStatus): Promise<{ error: string | null }> {
   const { error } = await supabase.rpc('set_order_status', { p_order_id: orderId, p_status: status });

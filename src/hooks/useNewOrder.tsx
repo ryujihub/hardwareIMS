@@ -127,7 +127,7 @@ export function NewOrderProvider({ children }: { children: React.ReactNode }) {
           i.productId === p.id ? { ...i, quantity: Math.min(i.quantity + 1, p.stock || 9999) } : i
         );
       } else {
-        cart = [...prev.cart, { productId: p.id, name: p.name, price: Number(p.price), quantity: 1, image_url: p.image_url }];
+        cart = [...prev.cart, { productId: p.id, name: p.name, price: Number(p.price), cost_price: Number(p.cost_price || 0), quantity: 1, image_url: p.image_url }];
       }
       return { ...prev, cart };
     });

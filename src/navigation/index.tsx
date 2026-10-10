@@ -28,16 +28,18 @@ export type TabKey = (typeof TABS)[number]['key'];
 type NewOrderScreen = 'selection' | 'checkout';
 
 export function MainTabs() {
-  const { profile } = useAuth();
+  const { profile, checkedIn } = useAuth();
   const styles = useStyles(makeStyles);
   const isStaff = profile?.role === 'staff';
 
   // Staff: Home (check-in/out), New Order, Stock only. Manager/admin: everything.
-  // Also: staff cannot access New Order unless checked in.
+  // Staff must be checked in to reach New Order — use the live `checkedIn` value
+  // (not `profile.checked_in`) so the tab appears/disappears the moment they tap
+  // check in/out, without needing a re-login.
   const visibleTabs = TABS.filter((t) => {
     if (!isStaff) return true;
     if (!t.staffAllowed) return false;
-    if (t.key === 'new') return profile?.checked_in === true;
+    if (t.key === 'new') return checkedIn;
     return true;
   });
 
@@ -45,7 +47,8 @@ export function MainTabs() {
   const [receipt, setReceipt] = useState<{ order: Order; items?: OrderItem[] } | null>(null);
   const [newOrderScreen, setNewOrderScreen] = useState<NewOrderScreen>('selection');
 
-  // Guard against a stale tab if role changed mid-session
+  // Guard against a stale tab: covers a role change mid-session *and* checking
+  // out while the New Order tab is open (it falls back to Home immediately).
   const tab: TabKey = visibleTabs.some((t) => t.key === rawTab) ? rawTab : 'home';
 
   // Receipt renders full-screen above the tabs until closed

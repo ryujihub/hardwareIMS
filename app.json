@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Hardware IMS",
-    "slug": "hardware-ims",
+    "name": "Store IMS",
+    "slug": "store-ims",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -29,10 +29,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hardware.ims"
+      "bundleIdentifier": "com.store.ims"
     },
     "android": {
-      "package": "com.hardware.ims",
+      "package": "com.store.ims",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1e3a5f"

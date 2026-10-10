@@ -13,6 +13,7 @@ export interface DailySalesRow {
   total_revenue: number;
   total_subtotal: number;
   total_delivery: number;
+  total_cost: number;
 }
 
 // Daily sales are grouped by the store's LOCAL calendar day. Bucketing by the
@@ -34,7 +35,7 @@ export async function fetchDailySales(limitDays = 14): Promise<DailySalesRow[]> 
 
   const { data: orders, error } = await supabase
     .from('orders')
-    .select('created_at, total, subtotal, delivery_fee, status')
+    .select('created_at, total, subtotal, delivery_fee, total_cost, status')
     .neq('status', 'cancelled')
     .gte('created_at', cutoff.toISOString())
     .order('created_at', { ascending: false });
@@ -51,6 +52,7 @@ export async function fetchDailySales(limitDays = 14): Promise<DailySalesRow[]> 
       existing.total_revenue += Number(o.total || 0);
       existing.total_subtotal += Number(o.subtotal || 0);
       existing.total_delivery += Number(o.delivery_fee || 0);
+      existing.total_cost += Number(o.total_cost || 0);
     } else {
       byDay.set(key, {
         day: key,
@@ -58,6 +60,7 @@ export async function fetchDailySales(limitDays = 14): Promise<DailySalesRow[]> 
         total_revenue: Number(o.total || 0),
         total_subtotal: Number(o.subtotal || 0),
         total_delivery: Number(o.delivery_fee || 0),
+        total_cost: Number(o.total_cost || 0),
       });
     }
   }
@@ -71,10 +74,11 @@ function escapeCsv(value: unknown): string {
 }
 
 export function buildSalesCsv(rows: DailySalesRow[]): string {
-  const header = 'Date,Orders,Revenue,Subtotal,Delivery Fees';
-  const lines = rows.map((r) =>
-    [r.day.slice(0, 10), r.total_orders, Number(r.total_revenue).toFixed(2), Number(r.total_subtotal).toFixed(2), Number(r.total_delivery).toFixed(2)].map(escapeCsv).join(',')
-  );
+  const header = 'Date,Orders,Revenue,Cost,Profit,Delivery Fees';
+  const lines = rows.map((r) => {
+    const profit = Number(r.total_revenue) - Number(r.total_cost || 0);
+    return [r.day.slice(0, 10), r.total_orders, Number(r.total_revenue).toFixed(2), Number(r.total_cost || 0).toFixed(2), profit.toFixed(2), Number(r.total_delivery).toFixed(2)].map(escapeCsv).join(',');
+  });
   return [header, ...lines].join('\n');
 }
 
@@ -82,27 +86,34 @@ function buildSalesHtml(rows: DailySalesRow[], title: string): string {
   const { store_name, primary_color } = getSettings();
   const body = rows
     .map(
-      (r) => `<tr>
+      (r) => {
+        const profit = Number(r.total_revenue) - Number(r.total_cost || 0);
+        return `<tr>
         <td>${r.day.slice(0, 10)}</td>
         <td style="text-align:center">${r.total_orders}</td>
         <td style="text-align:right">${peso(Number(r.total_revenue))}</td>
+        <td style="text-align:right">${peso(profit)}</td>
         <td style="text-align:right">${peso(Number(r.total_delivery))}</td>
-      </tr>`
+      </tr>`;
+      }
     )
     .join('');
   const grandTotal = rows.reduce((s, r) => s + Number(r.total_revenue), 0);
+  const grandCost = rows.reduce((s, r) => s + Number(r.total_cost || 0), 0);
+  const grandProfit = grandTotal - grandCost;
 
   return `<html><body style="font-family: sans-serif; padding: 24px;">
     <h1 style="margin:0 0 4px">${escapeHtml(store_name)}</h1>
     <p style="margin:0 0 16px; color:#555">${escapeHtml(title)} — generated ${formatDateTime(new Date().toISOString())}</p>
     <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%; font-size:13px">
       <tr style="background:${primary_color}; color:#fff">
-        <th>Date</th><th>Orders</th><th>Revenue</th><th>Delivery</th>
+        <th>Date</th><th>Orders</th><th>Revenue</th><th>Profit</th><th>Delivery</th>
       </tr>
       ${body}
       <tr>
         <td colspan="2"><b>TOTAL (${rows.length} days)</b></td>
         <td style="text-align:right"><b>${peso(grandTotal)}</b></td>
+        <td style="text-align:right"><b>${peso(grandProfit)}</b></td>
         <td></td>
       </tr>
     </table>

@@ -304,6 +304,7 @@ function EditProductModal({
   const [sku, setSku] = useState('');
   const [barcode, setBarcode] = useState('');
   const [category, setCategory] = useState('');
+  const [costPrice, setCostPrice] = useState('');
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('');
   const [reorder, setReorder] = useState('');
@@ -363,6 +364,7 @@ function EditProductModal({
       setSku(product.sku ?? '');
       setBarcode(product.barcode ?? '');
       setCategory(product.category ?? '');
+      setCostPrice(String(product.cost_price ?? ''));
       setPrice(String(product.price));
       setStock(String(product.stock));
       setReorder(String(product.reorder_point));
@@ -373,6 +375,7 @@ function EditProductModal({
       setSku('');
       setBarcode('');
       setCategory('');
+      setCostPrice('');
       setPrice('');
       setStock('0');
       setReorder(String(settings.low_stock_threshold));
@@ -397,6 +400,7 @@ function EditProductModal({
       sku: sku.trim() || null,
       barcode: barcode.trim() || null,
       category: category.trim() || null,
+      cost_price: parseFloat(costPrice) || 0,
       price: priceNum,
       stock: product ? product.stock : parseInt(stock, 10) || 0,
       reorder_point: parseInt(reorder, 10) || 0,
@@ -468,7 +472,11 @@ function EditProductModal({
 
           <View style={styles.row}>
             <View style={{ flex: 1, marginRight: spacing(2) }}>
-              <Text style={styles.label}>Price ({settings.currency_symbol})</Text>
+              <Text style={styles.label}>Orig. Price (Cost)</Text>
+              <TextInput style={styles.input} value={costPrice} onChangeText={setCostPrice} keyboardType="decimal-pad" />
+            </View>
+            <View style={{ flex: 1, marginRight: spacing(2) }}>
+              <Text style={styles.label}>Selling Price</Text>
               <TextInput style={styles.input} value={price} onChangeText={setPrice} keyboardType="decimal-pad" />
             </View>
             <View style={{ flex: 1 }}>

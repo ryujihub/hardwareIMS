@@ -15,6 +15,7 @@ export interface Product {
   barcode: string | null;
   category: string | null;
   price: number;
+  cost_price?: number;
   stock: number;
   reorder_point: number;
   image_url?: string | null;
@@ -31,6 +32,7 @@ export interface CartItem {
   productId: string;
   name: string;
   price: number;
+  cost_price?: number;
   quantity: number;
   image_url?: string | null;
 }
@@ -47,6 +49,7 @@ export interface Order {
   subtotal: number;
   delivery_fee: number;
   total: number;
+  total_cost?: number;
   payment_method: PaymentMethod;
   payment_status: PaymentStatus;
   amount_paid: number;
@@ -61,6 +64,7 @@ export interface OrderItem {
   product_id: string | null;
   name: string;
   price: number;
+  cost_price?: number;
   quantity: number;
 }
 
